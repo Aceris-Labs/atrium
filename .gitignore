@@ -1,0 +1,14 @@
+node_modules/
+out/
+dist/
+
+# tsc --build artifacts (source tree is .ts/.tsx only)
+*.tsbuildinfo
+src/**/*.js
+src/**/*.jsx
+src/main/**/*.d.ts
+src/shared/**/*.d.ts
+src/renderer/src/**/*.d.ts
+!src/renderer/src/env.d.ts
+electron.vite.config.js
+electron.vite.config.d.ts
