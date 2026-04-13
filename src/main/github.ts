@@ -2,7 +2,7 @@ import { spawnSync, execSync } from 'child_process'
 import { readdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import { getConfig } from './store'
+import { getConfig, getWingRootDir } from './store'
 import type { PRStatus, RepoInfo } from '../shared/types'
 
 function gql(searchQuery: string): PRStatus[] {
@@ -54,20 +54,51 @@ function gql(searchQuery: string): PRStatus[] {
   }
 }
 
-export function listMyPRs(): PRStatus[] {
-  const scope = buildScopeFilter()
-  return gql(`is:pr is:open author:@me${scope}`)
+export function listMyPRs(wingId: string): PRStatus[] {
+  return scopedPRQuery(wingId, 'is:pr is:open author:@me')
 }
 
-export function listReviewRequests(): PRStatus[] {
-  const scope = buildScopeFilter()
-  return gql(`is:pr is:open review-requested:@me${scope}`)
+export function listReviewRequests(wingId: string): PRStatus[] {
+  return scopedPRQuery(wingId, 'is:pr is:open review-requested:@me')
+}
+
+function scopedPRQuery(wingId: string, baseQuery: string): PRStatus[] {
+  const rootDir = getWingRootDir(wingId)
+
+  // No root dir configured → unbounded query across all of GitHub.
+  // This is the "I haven't told you where my work lives" mode.
+  if (!rootDir) return gql(baseQuery)
+
+  // Root dir configured but no repos found → deliberately return nothing.
+  // Falling back to an unbounded query here would be surprising: a user who
+  // set a directory to scope their PRs should never see PRs from unrelated
+  // repos just because the scan came up empty.
+  const repos = getReposInDirectory(rootDir)
+  if (repos.length === 0) return []
+
+  // If all repos share the same owner, use `org:` (cleaner, handles forks).
+  // Otherwise list each repo explicitly.
+  const owners = [...new Set(repos.map((r) => r.repo.split('/')[0]))]
+  const scope = owners.length === 1
+    ? ` org:${owners[0]}`
+    : ' ' + repos.map((r) => `repo:${r.repo}`).join(' ')
+  return gql(baseQuery + scope)
 }
 
 export function getReposInDirectory(dir: string): RepoInfo[] {
   const expanded = dir.replace(/^~/, homedir())
   if (!existsSync(expanded)) return []
 
+  // Case 1: the directory itself is a git repo. Use it directly and don't
+  // also scan children — treating a repo as a "container of repos" would
+  // produce spurious matches from submodules, nested checkouts, etc.
+  if (existsSync(join(expanded, '.git'))) {
+    const repo = readRepoRemote(expanded)
+    return repo ? [{ path: expanded, repo }] : []
+  }
+
+  // Case 2: the directory is a container — scan its immediate children for
+  // git repos.
   const repos: RepoInfo[] = []
   try {
     const entries = readdirSync(expanded, { withFileTypes: true })
@@ -75,18 +106,24 @@ export function getReposInDirectory(dir: string): RepoInfo[] {
       if (!entry.isDirectory()) continue
       const fullPath = join(expanded, entry.name)
       if (!existsSync(join(fullPath, '.git'))) continue
-      try {
-        const remote = execSync('git remote get-url origin', {
-          cwd: fullPath,
-          encoding: 'utf-8'
-        }).trim()
-        const repo = parseGitRemote(remote)
-        if (repo) repos.push({ path: fullPath, repo })
-      } catch {}
+      const repo = readRepoRemote(fullPath)
+      if (repo) repos.push({ path: fullPath, repo })
     }
   } catch {}
 
   return repos
+}
+
+function readRepoRemote(repoPath: string): string | null {
+  try {
+    const remote = execSync('git remote get-url origin 2>/dev/null', {
+      cwd: repoPath,
+      encoding: 'utf-8'
+    }).trim()
+    return parseGitRemote(remote)
+  } catch {
+    return null
+  }
 }
 
 function parseGitRemote(url: string): string | null {
@@ -94,26 +131,11 @@ function parseGitRemote(url: string): string | null {
   return match ? match[1] : null
 }
 
-export function getDefaultRepo(): string | null {
-  const { rootDir } = getConfig()
+export function getDefaultRepo(wingId: string): string | null {
+  const rootDir = getWingRootDir(wingId)
   if (!rootDir) return null
   const repos = getReposInDirectory(rootDir)
   return repos.length > 0 ? repos[0].repo : null
-}
-
-function buildScopeFilter(): string {
-  const { rootDir } = getConfig()
-  if (!rootDir) return ''
-
-  const repos = getReposInDirectory(rootDir)
-  if (repos.length === 0) return ''
-
-  // If all repos share the same owner, use org: filter (cleaner, handles forks etc.)
-  const owners = [...new Set(repos.map((r) => r.repo.split('/')[0]))]
-  if (owners.length === 1) return ` org:${owners[0]}`
-
-  // Otherwise list each repo explicitly (GitHub search supports up to ~20 repo: qualifiers)
-  return ' ' + repos.map((r) => `repo:${r.repo}`).join(' ')
 }
 
 export function fetchPR(repo: string, number: number): PRStatus | null {
@@ -147,7 +169,7 @@ export function fetchPR(repo: string, number: number): PRStatus | null {
 
 export function listTmuxSessions(): string[] {
   try {
-    const raw = execSync('tmux list-sessions -F "#{session_name}"', { encoding: 'utf-8' })
+    const raw = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null', { encoding: 'utf-8' })
     return raw.trim().split('\n').filter(Boolean)
   } catch {
     return []

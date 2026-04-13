@@ -1,48 +1,93 @@
-import { contextBridge, ipcRenderer, shell } from 'electron'
-import type { Workspace, WindowApi } from '../shared/types'
+import { contextBridge, ipcRenderer, shell } from "electron";
+import type {
+  Workspace,
+  Wing,
+  WindowApi,
+  LaunchAction,
+  ConnectorSource,
+} from "../shared/types";
 
 const api: WindowApi = {
+  wings: {
+    list: () => ipcRenderer.invoke("wings:list"),
+    create: (data: {
+      name: string;
+      rootDir?: string;
+      launchProfile?: LaunchAction[];
+    }) => ipcRenderer.invoke("wings:create", data),
+    update: (wing: Wing) => ipcRenderer.invoke("wings:update", wing),
+    reorder: (orderedIds: string[]) =>
+      ipcRenderer.invoke("wings:reorder", orderedIds),
+    setActive: (id: string) => ipcRenderer.invoke("wings:setActive", id),
+  },
   workspaces: {
-    list: () => ipcRenderer.invoke('workspaces:list'),
-    create: (data) => ipcRenderer.invoke('workspaces:create', data),
-    update: (workspace) => ipcRenderer.invoke('workspaces:update', workspace),
-    delete: (id) => ipcRenderer.invoke('workspaces:delete', id)
+    list: (wingId: string) => ipcRenderer.invoke("workspaces:list", wingId),
+    create: (wingId, data) =>
+      ipcRenderer.invoke("workspaces:create", wingId, data),
+    update: (wingId, workspace) =>
+      ipcRenderer.invoke("workspaces:update", wingId, workspace),
+    delete: (wingId, id) => ipcRenderer.invoke("workspaces:delete", wingId, id),
   },
   github: {
-    myPRs: (repo?: string) => ipcRenderer.invoke('github:myPRs', repo),
-    reviewRequests: () => ipcRenderer.invoke('github:reviewRequests'),
-    tmuxSessions: () => ipcRenderer.invoke('github:tmuxSessions'),
-    fetchPR: (repo: string, number: number) => ipcRenderer.invoke('github:fetchPR', repo, number),
-    defaultRepo: () => ipcRenderer.invoke('github:defaultRepo')
+    myPRs: (wingId: string) => ipcRenderer.invoke("github:myPRs", wingId),
+    reviewRequests: (wingId: string) =>
+      ipcRenderer.invoke("github:reviewRequests", wingId),
+    tmuxSessions: () => ipcRenderer.invoke("github:tmuxSessions"),
+    fetchPR: (repo: string, number: number) =>
+      ipcRenderer.invoke("github:fetchPR", repo, number),
+    defaultRepo: (wingId: string) =>
+      ipcRenderer.invoke("github:defaultRepo", wingId),
   },
   workspace: {
-    launch: (workspace: Workspace) => ipcRenderer.invoke('workspace:launch', workspace),
-    stop: (workspaceId: string) => ipcRenderer.invoke('workspace:stop', workspaceId)
+    launch: (wingId: string, workspace: Workspace) =>
+      ipcRenderer.invoke("workspace:launch", wingId, workspace),
+    stop: (workspaceId: string) =>
+      ipcRenderer.invoke("workspace:stop", workspaceId),
   },
   shell: {
-    openExternal: (url: string) => shell.openExternal(url)
+    openExternal: (url: string) => shell.openExternal(url),
   },
   agents: {
-    statuses: (sessions: Record<string, string | undefined>) => ipcRenderer.invoke('agents:statuses', sessions),
-    sessions: () => ipcRenderer.invoke('agents:sessions')
+    statuses: (sessions: Record<string, string | undefined>) =>
+      ipcRenderer.invoke("agents:statuses", sessions),
+    sessions: () => ipcRenderer.invoke("agents:sessions"),
   },
   watchedPRs: {
-    list: () => ipcRenderer.invoke('watchedPRs:list'),
-    add: (pr: { number: number; repo: string }) => ipcRenderer.invoke('watchedPRs:add', pr),
-    remove: (num: number) => ipcRenderer.invoke('watchedPRs:remove', num)
+    list: (wingId: string) => ipcRenderer.invoke("watchedPRs:list", wingId),
+    add: (wingId: string, pr: { number: number; repo: string }) =>
+      ipcRenderer.invoke("watchedPRs:add", wingId, pr),
+    remove: (wingId: string, num: number) =>
+      ipcRenderer.invoke("watchedPRs:remove", wingId, num),
   },
   config: {
-    get: () => ipcRenderer.invoke('config:get'),
-    set: (partial: object) => ipcRenderer.invoke('config:set', partial)
+    get: () => ipcRenderer.invoke("config:get"),
+    set: (partial: object) => ipcRenderer.invoke("config:set", partial),
   },
   setup: {
-    detect: () => ipcRenderer.invoke('setup:detect')
+    detect: () => ipcRenderer.invoke("setup:detect"),
   },
-  worktrees: {
-    list: () => ipcRenderer.invoke('worktrees:list'),
-    create: (repoPath: string, name: string, branch: string, isNew: boolean) =>
-      ipcRenderer.invoke('worktrees:create', repoPath, name, branch, isNew)
-  }
-}
+  git: {
+    detectRepo: (dirPath: string) =>
+      ipcRenderer.invoke("git:detectRepo", dirPath),
+    checkoutBranch: (dirPath: string, branch: string) =>
+      ipcRenderer.invoke("git:checkoutBranch", dirPath, branch),
+  },
+  fs: {
+    listDirs: (partial: string) => ipcRenderer.invoke("fs:listDirs", partial),
+  },
+  connectors: {
+    list: () => ipcRenderer.invoke("connectors:list"),
+    set: (source: ConnectorSource, config: unknown) =>
+      ipcRenderer.invoke("connectors:set", source, config),
+    remove: (source: ConnectorSource) =>
+      ipcRenderer.invoke("connectors:remove", source),
+    test: (source: ConnectorSource, config?: unknown) =>
+      ipcRenderer.invoke("connectors:test", source, config),
+  },
+  links: {
+    hydrate: (urls: string[]) => ipcRenderer.invoke("links:hydrate", urls),
+    refresh: (url: string) => ipcRenderer.invoke("links:refresh", url),
+  },
+};
 
-contextBridge.exposeInMainWorld('api', api)
+contextBridge.exposeInMainWorld("api", api);

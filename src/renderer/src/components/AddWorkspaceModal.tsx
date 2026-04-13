@@ -1,51 +1,46 @@
-import { useEffect, useState } from 'react'
-import { WorktreeSelector } from './WorktreeSelector'
-import type { Workspace, WorktreeInfo } from '../../../shared/types'
+import { useState } from "react";
+import { DirectoryField } from "./DirectoryField";
+import type { Workspace } from "../../../shared/types";
 
 interface Props {
-  onAdd: (data: Omit<Workspace, 'id' | 'createdAt' | 'updatedAt'>) => void
-  onClose: () => void
+  defaultDirectoryPath?: string;
+  onAdd: (data: Omit<Workspace, "id" | "createdAt" | "updatedAt">) => void;
+  onClose: () => void;
 }
 
-export function AddWorkspaceModal({ onAdd, onClose }: Props) {
-  const [title, setTitle] = useState('')
-  const [type, setType] = useState<Workspace['type']>('project')
-  const [worktreePath, setWorktreePath] = useState<string | undefined>(undefined)
-  const [branch, setBranch] = useState('')
-  const [defaultRepoPath, setDefaultRepoPath] = useState<string | undefined>(undefined)
-
-  // Default to the main repo's worktree
-  useEffect(() => {
-    window.api.worktrees.list().then((wts) => {
-      if (wts.length > 0 && !worktreePath) {
-        setWorktreePath(wts[0].path)
-        setBranch(wts[0].branch)
-        setDefaultRepoPath(wts[0].path)
-      }
-    })
-  }, [])
+export function AddWorkspaceModal({
+  defaultDirectoryPath,
+  onAdd,
+  onClose,
+}: Props) {
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState<Workspace["type"]>("project");
+  const [directoryPath, setDirectoryPath] = useState<string | undefined>(
+    defaultDirectoryPath,
+  );
+  const [branch, setBranch] = useState<string | undefined>(undefined);
 
   function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!title.trim()) return
+    e.preventDefault();
+    if (!title.trim()) return;
     onAdd({
       title: title.trim(),
       type,
-      status: 'active',
-      branch: branch || undefined,
-      worktreePath,
+      status: "active",
+      branch,
+      directoryPath,
       prs: [],
       todos: [],
       notes: [],
-      links: []
-    })
+      links: [],
+    });
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">New workspace</div>
-        <form onSubmit={handleSubmit} style={{ display: 'contents' }}>
+        <form onSubmit={handleSubmit} style={{ display: "contents" }}>
           <div className="form-group">
             <label className="form-label">Title</label>
             <input
@@ -62,7 +57,7 @@ export function AddWorkspaceModal({ onAdd, onClose }: Props) {
             <select
               className="form-select"
               value={type}
-              onChange={(e) => setType(e.target.value as Workspace['type'])}
+              onChange={(e) => setType(e.target.value as Workspace["type"])}
             >
               <option value="project">project</option>
               <option value="task">task</option>
@@ -71,12 +66,14 @@ export function AddWorkspaceModal({ onAdd, onClose }: Props) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Worktree</label>
-            <WorktreeSelector
-              value={worktreePath}
-              onChange={(path, br) => {
-                setWorktreePath(path)
-                if (br) setBranch(br)
+            <label className="form-label">Directory</label>
+            <DirectoryField
+              directoryPath={directoryPath}
+              branch={branch}
+              onChange={(next) => {
+                if ("directoryPath" in next)
+                  setDirectoryPath(next.directoryPath);
+                if ("branch" in next) setBranch(next.branch);
               }}
             />
           </div>
@@ -92,5 +89,5 @@ export function AddWorkspaceModal({ onAdd, onClose }: Props) {
         </form>
       </div>
     </div>
-  )
+  );
 }

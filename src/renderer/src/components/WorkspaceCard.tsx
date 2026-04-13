@@ -32,9 +32,15 @@ const REVIEW_CLASS: Record<string, string> = {
 
 export function WorkspaceCard({ workspace, prStatuses, tmuxRunning, agentStatus, onClick, draggingPR, onDrop }: Props) {
   const [isOver, setIsOver] = useState(false)
-  const linkedPRs = prStatuses.filter((pr) => workspace.prs.includes(pr.number))
+  const linkedKeys = new Set(workspace.prs.map((p) => `${p.repo}-${p.number}`))
+  const linkedPRs = prStatuses.filter((pr) => linkedKeys.has(`${pr.repo ?? ''}-${pr.number}`))
+  const loadingLinkedPRs = workspace.prs.filter(
+    (p) => !linkedPRs.find((lp) => lp.repo === p.repo && lp.number === p.number)
+  )
 
-  const alreadyLinked = draggingPR ? workspace.prs.includes(draggingPR.number) : false
+  const alreadyLinked = draggingPR
+    ? linkedKeys.has(`${draggingPR.repo ?? ''}-${draggingPR.number}`)
+    : false
   const isDropTarget = draggingPR !== null && !alreadyLinked
 
   return (
@@ -58,10 +64,10 @@ export function WorkspaceCard({ workspace, prStatuses, tmuxRunning, agentStatus,
         <span className={`card-type-badge ${workspace.type}`}>{workspace.type}</span>
       </div>
 
-      {linkedPRs.length > 0 && (
+      {(linkedPRs.length > 0 || loadingLinkedPRs.length > 0) && (
         <div className="pr-list">
           {linkedPRs.map((pr) => (
-            <div key={pr.number} className="pr-row">
+            <div key={`${pr.repo ?? ''}-${pr.number}`} className="pr-row">
               <span className="pr-number">#{pr.number}</span>
               <span className="pr-title">{pr.title}</span>
               <div className="pr-badges">
@@ -73,6 +79,12 @@ export function WorkspaceCard({ workspace, prStatuses, tmuxRunning, agentStatus,
                   </span>
                 )}
               </div>
+            </div>
+          ))}
+          {loadingLinkedPRs.map((p) => (
+            <div key={`${p.repo}-${p.number}`} className="pr-row" style={{ opacity: 0.4 }}>
+              <span className="pr-number">#{p.number}</span>
+              <span className="pr-title">Loading…</span>
             </div>
           ))}
         </div>

@@ -1,179 +1,380 @@
-import { useEffect, useState } from 'react'
-import type { AtriumConfig, LaunchAction, DetectedTools } from '../../../shared/types'
+import { useEffect, useState } from "react";
+import { PathInput } from "./PathInput";
+import { ConnectorsPanel } from "./ConnectorsPanel";
+import type {
+  AtriumConfig,
+  LaunchAction,
+  DetectedTools,
+  Wing,
+} from "../../../shared/types";
 
 interface Props {
-  onClose: () => void
-  onSave: () => void
-  onRerunSetup: () => void
+  wing: Wing;
+  onClose: () => void;
+  onSave: () => void;
+  onRerunSetup: () => void;
 }
 
-type Preset = 'editor-only' | 'terminal-tmux' | 'editor-and-terminal' | 'terminal-cmd'
+type Tab = "general" | "wing" | "connectors";
+type Preset =
+  | "editor-only"
+  | "terminal-tmux"
+  | "editor-and-terminal"
+  | "terminal-cmd";
 
 const PRESET_LABELS: Record<Preset, string> = {
-  'editor-only': 'Editor only',
-  'terminal-tmux': 'Terminal + tmux',
-  'editor-and-terminal': 'Editor + Terminal',
-  'terminal-cmd': 'Terminal + command'
-}
+  "editor-only": "Editor only",
+  "terminal-tmux": "Terminal + tmux",
+  "editor-and-terminal": "Editor + Terminal",
+  "terminal-cmd": "Terminal + command",
+};
 
 function detectPreset(profile: LaunchAction[]): Preset {
-  const types = profile.map((a) => a.type)
-  if (types.length === 1 && types[0] === 'editor') return 'editor-only'
-  if (types.length === 1 && types[0] === 'terminal-tmux') return 'terminal-tmux'
-  if (types.length === 1 && types[0] === 'terminal-cmd') return 'terminal-cmd'
-  if (types.includes('editor') && types.includes('terminal-tmux')) return 'editor-and-terminal'
-  return 'terminal-tmux'
+  const types = profile.map((a) => a.type);
+  if (types.length === 1 && types[0] === "editor") return "editor-only";
+  if (types.length === 1 && types[0] === "terminal-tmux")
+    return "terminal-tmux";
+  if (types.length === 1 && types[0] === "terminal-cmd") return "terminal-cmd";
+  if (types.includes("editor") && types.includes("terminal-tmux"))
+    return "editor-and-terminal";
+  return "terminal-tmux";
 }
 
-function findAction<T extends LaunchAction['type']>(profile: LaunchAction[], type: T) {
-  return profile.find((a) => a.type === type) as Extract<LaunchAction, { type: T }> | undefined
+function findAction<T extends LaunchAction["type"]>(
+  profile: LaunchAction[],
+  type: T,
+) {
+  return profile.find((a) => a.type === type) as
+    | Extract<LaunchAction, { type: T }>
+    | undefined;
 }
 
-export function SettingsModal({ onClose, onSave, onRerunSetup }: Props) {
-  const [config, setConfig] = useState<AtriumConfig | null>(null)
-  const [tools, setTools] = useState<DetectedTools | null>(null)
-  const [rootDir, setRootDir] = useState('')
-  const [preset, setPreset] = useState<Preset>('terminal-tmux')
-  const [editorApp, setEditorApp] = useState<'cursor' | 'code'>('cursor')
-  const [terminalApp, setTerminalApp] = useState<'ghostty' | 'iterm' | 'terminal' | 'warp'>('ghostty')
-  const [customCmd, setCustomCmd] = useState('claude --resume')
-  const [saving, setSaving] = useState(false)
+interface ProfileEditorState {
+  preset: Preset;
+  editorApp: "cursor" | "code";
+  terminalApp: "ghostty" | "iterm" | "terminal" | "warp";
+  customCmd: string;
+}
 
-  useEffect(() => {
-    window.api.config.get().then((c) => {
-      setConfig(c)
-      setRootDir(c.rootDir ?? '')
-      const profile = c.launchProfile ?? []
-      setPreset(detectPreset(profile))
-      const editorAction = findAction(profile, 'editor')
-      if (editorAction) setEditorApp(editorAction.app)
-      const tmuxAction = findAction(profile, 'terminal-tmux')
-      const cmdAction = findAction(profile, 'terminal-cmd')
-      if (tmuxAction) setTerminalApp(tmuxAction.app)
-      else if (cmdAction) { setTerminalApp(cmdAction.app); setCustomCmd(cmdAction.command) }
-    })
-    window.api.setup.detect().then(setTools)
-  }, [])
+function initialProfileState(
+  profile: LaunchAction[] | undefined,
+): ProfileEditorState {
+  const p = profile ?? [];
+  const preset = detectPreset(p);
+  const editorAction = findAction(p, "editor");
+  const tmuxAction = findAction(p, "terminal-tmux");
+  const cmdAction = findAction(p, "terminal-cmd");
+  return {
+    preset,
+    editorApp: editorAction?.app ?? "cursor",
+    terminalApp: (tmuxAction?.app ??
+      cmdAction?.app ??
+      "ghostty") as ProfileEditorState["terminalApp"],
+    customCmd: cmdAction?.command ?? "claude --resume",
+  };
+}
 
-  function buildProfile(): LaunchAction[] {
-    switch (preset) {
-      case 'editor-only': return [{ type: 'editor', app: editorApp }]
-      case 'terminal-tmux': return [{ type: 'terminal-tmux', app: terminalApp }]
-      case 'editor-and-terminal': return [{ type: 'editor', app: editorApp }, { type: 'terminal-tmux', app: terminalApp }]
-      case 'terminal-cmd': return [{ type: 'terminal-cmd', app: terminalApp, command: customCmd }]
-    }
+function buildProfile(state: ProfileEditorState): LaunchAction[] {
+  switch (state.preset) {
+    case "editor-only":
+      return [{ type: "editor", app: state.editorApp }];
+    case "terminal-tmux":
+      return [{ type: "terminal-tmux", app: state.terminalApp }];
+    case "editor-and-terminal":
+      return [
+        { type: "editor", app: state.editorApp },
+        { type: "terminal-tmux", app: state.terminalApp },
+      ];
+    case "terminal-cmd":
+      return [
+        {
+          type: "terminal-cmd",
+          app: state.terminalApp,
+          command: state.customCmd,
+        },
+      ];
   }
+}
 
-  async function handleSave() {
-    setSaving(true)
-    await window.api.config.set({
-      rootDir: rootDir.trim() || undefined,
-      launchProfile: buildProfile()
-    })
-    setSaving(false)
-    onSave()
-    onClose()
-  }
+interface LaunchProfileEditorProps {
+  state: ProfileEditorState;
+  onChange: (next: ProfileEditorState) => void;
+  tools: DetectedTools | null;
+}
 
-  if (!config) return null
-
-  const needsEditor = preset === 'editor-only' || preset === 'editor-and-terminal'
-  const needsTerminal = preset !== 'editor-only'
+function LaunchProfileEditor({
+  state,
+  onChange,
+  tools,
+}: LaunchProfileEditorProps) {
+  const needsEditor =
+    state.preset === "editor-only" || state.preset === "editor-and-terminal";
+  const needsTerminal = state.preset !== "editor-only";
 
   const editorOptions = [
-    { value: 'cursor' as const, label: 'Cursor', installed: tools?.editors.cursor.installed ?? false },
-    { value: 'code' as const, label: 'VS Code', installed: tools?.editors.code.installed ?? false }
-  ]
+    {
+      value: "cursor" as const,
+      label: "Cursor",
+      installed: tools?.editors.cursor.installed ?? false,
+    },
+    {
+      value: "code" as const,
+      label: "VS Code",
+      installed: tools?.editors.code.installed ?? false,
+    },
+  ];
   const terminalOptions = [
-    { value: 'ghostty' as const, label: 'Ghostty', installed: tools?.terminals.ghostty.installed ?? false },
-    { value: 'iterm' as const, label: 'iTerm', installed: tools?.terminals.iterm.installed ?? false },
-    { value: 'warp' as const, label: 'Warp', installed: tools?.terminals.warp.installed ?? false },
-    { value: 'terminal' as const, label: 'Terminal.app', installed: tools?.terminals.terminal.installed ?? false }
-  ]
+    {
+      value: "ghostty" as const,
+      label: "Ghostty",
+      installed: tools?.terminals.ghostty.installed ?? false,
+    },
+    {
+      value: "iterm" as const,
+      label: "iTerm",
+      installed: tools?.terminals.iterm.installed ?? false,
+    },
+    {
+      value: "warp" as const,
+      label: "Warp",
+      installed: tools?.terminals.warp.installed ?? false,
+    },
+    {
+      value: "terminal" as const,
+      label: "Terminal.app",
+      installed: tools?.terminals.terminal.installed ?? false,
+    },
+  ];
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
-        <div className="modal-title">Settings</div>
-
-        <div className="form-group">
-          <label className="form-label">Root directory</label>
-          <input
-            className="form-input"
-            value={rootDir}
-            onChange={(e) => setRootDir(e.target.value)}
-            placeholder="~/your-project-directory"
-          />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Launch profile</label>
-          <div className="setup-inline-options">
-            {(Object.entries(PRESET_LABELS) as [Preset, string][]).map(([key, label]) => (
+    <>
+      <div className="form-group">
+        <label className="form-label">Launch profile</label>
+        <div className="setup-inline-options">
+          {(Object.entries(PRESET_LABELS) as [Preset, string][]).map(
+            ([key, label]) => (
               <button
                 key={key}
-                className={`setup-chip${preset === key ? ' active' : ''}`}
-                onClick={() => setPreset(key)}
+                className={`setup-chip${state.preset === key ? " active" : ""}`}
+                onClick={() => onChange({ ...state, preset: key })}
               >
                 {label}
+              </button>
+            ),
+          )}
+        </div>
+      </div>
+
+      {needsEditor && (
+        <div className="form-group">
+          <label className="form-label">Editor</label>
+          <div className="setup-inline-options">
+            {editorOptions.map((opt) => (
+              <button
+                key={opt.value}
+                className={`setup-chip${state.editorApp === opt.value ? " active" : ""}${!opt.installed ? " disabled" : ""}`}
+                onClick={() => onChange({ ...state, editorApp: opt.value })}
+              >
+                {opt.label}
               </button>
             ))}
           </div>
         </div>
+      )}
 
-        {needsEditor && (
-          <div className="form-group">
-            <label className="form-label">Editor</label>
-            <div className="setup-inline-options">
-              {editorOptions.map((opt) => (
-                <button
-                  key={opt.value}
-                  className={`setup-chip${editorApp === opt.value ? ' active' : ''}${!opt.installed ? ' disabled' : ''}`}
-                  onClick={() => setEditorApp(opt.value)}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+      {needsTerminal && (
+        <div className="form-group">
+          <label className="form-label">Terminal</label>
+          <div className="setup-inline-options">
+            {terminalOptions.map((opt) => (
+              <button
+                key={opt.value}
+                className={`setup-chip${state.terminalApp === opt.value ? " active" : ""}${!opt.installed ? " disabled" : ""}`}
+                onClick={() => onChange({ ...state, terminalApp: opt.value })}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
+        </div>
+      )}
+
+      {state.preset === "terminal-cmd" && (
+        <div className="form-group">
+          <label className="form-label">Command</label>
+          <input
+            className="form-input"
+            value={state.customCmd}
+            onChange={(e) => onChange({ ...state, customCmd: e.target.value })}
+            placeholder="claude --resume"
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+export function SettingsModal({ wing, onClose, onSave, onRerunSetup }: Props) {
+  const [tab, setTab] = useState<Tab>("wing");
+  const [config, setConfig] = useState<AtriumConfig | null>(null);
+  const [tools, setTools] = useState<DetectedTools | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Global state
+  const [defaultProfileState, setDefaultProfileState] =
+    useState<ProfileEditorState | null>(null);
+
+  // Wing state
+  const [wingName, setWingName] = useState(wing.name);
+  const [wingRootDir, setWingRootDir] = useState(wing.rootDir ?? "");
+  const [overrideProfile, setOverrideProfile] = useState<boolean>(
+    wing.launchProfile !== undefined,
+  );
+  const [wingProfileState, setWingProfileState] =
+    useState<ProfileEditorState | null>(null);
+
+  useEffect(() => {
+    window.api.config.get().then((c) => {
+      setConfig(c);
+      setDefaultProfileState(initialProfileState(c.defaultLaunchProfile));
+      setWingProfileState(
+        initialProfileState(wing.launchProfile ?? c.defaultLaunchProfile),
+      );
+    });
+    window.api.setup.detect().then(setTools);
+  }, [wing.id]);
+
+  async function handleSave() {
+    if (!config || !defaultProfileState || !wingProfileState) return;
+    setSaving(true);
+    try {
+      // Save global config (default profile)
+      await window.api.config.set({
+        defaultLaunchProfile: buildProfile(defaultProfileState),
+      });
+      // Save wing
+      await window.api.wings.update({
+        ...wing,
+        name: wingName.trim() || wing.name,
+        rootDir: wingRootDir.trim() || undefined,
+        launchProfile: overrideProfile
+          ? buildProfile(wingProfileState)
+          : undefined,
+      });
+    } finally {
+      setSaving(false);
+    }
+    onSave();
+    onClose();
+  }
+
+  if (!config || !defaultProfileState || !wingProfileState) return null;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 560 }}
+      >
+        <div className="modal-title">Settings</div>
+
+        <div className="setup-inline-options" style={{ marginBottom: 16 }}>
+          <button
+            className={`setup-chip${tab === "wing" ? " active" : ""}`}
+            onClick={() => setTab("wing")}
+          >
+            This wing ({wing.name})
+          </button>
+          <button
+            className={`setup-chip${tab === "general" ? " active" : ""}`}
+            onClick={() => setTab("general")}
+          >
+            General
+          </button>
+          <button
+            className={`setup-chip${tab === "connectors" ? " active" : ""}`}
+            onClick={() => setTab("connectors")}
+          >
+            Connectors
+          </button>
+        </div>
+
+        {tab === "wing" && (
+          <>
+            <div className="form-group">
+              <label className="form-label">Name</label>
+              <input
+                className="form-input"
+                value={wingName}
+                onChange={(e) => setWingName(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Root directory</label>
+              <PathInput
+                value={wingRootDir}
+                onChange={setWingRootDir}
+                placeholder="~/your-project-directory"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="wt-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={overrideProfile}
+                  onChange={(e) => setOverrideProfile(e.target.checked)}
+                />
+                Override default launch profile for this wing
+              </label>
+            </div>
+
+            {overrideProfile && (
+              <LaunchProfileEditor
+                state={wingProfileState}
+                onChange={setWingProfileState}
+                tools={tools}
+              />
+            )}
+          </>
         )}
 
-        {needsTerminal && (
-          <div className="form-group">
-            <label className="form-label">Terminal</label>
-            <div className="setup-inline-options">
-              {terminalOptions.map((opt) => (
-                <button
-                  key={opt.value}
-                  className={`setup-chip${terminalApp === opt.value ? ' active' : ''}${!opt.installed ? ' disabled' : ''}`}
-                  onClick={() => setTerminalApp(opt.value)}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {preset === 'terminal-cmd' && (
-          <div className="form-group">
-            <label className="form-label">Command</label>
-            <input
-              className="form-input"
-              value={customCmd}
-              onChange={(e) => setCustomCmd(e.target.value)}
-              placeholder="claude --resume"
+        {tab === "general" && (
+          <>
+            <p className="setup-desc" style={{ marginBottom: 12 }}>
+              The default launch profile applies to wings that don't override
+              it.
+            </p>
+            <LaunchProfileEditor
+              state={defaultProfileState}
+              onChange={setDefaultProfileState}
+              tools={tools}
             />
-          </div>
+            <div className="form-group" style={{ marginTop: 16 }}>
+              <button className="btn btn-ghost" onClick={onRerunSetup}>
+                Re-run setup wizard
+              </button>
+            </div>
+          </>
         )}
+
+        {tab === "connectors" && <ConnectorsPanel />}
 
         <div className="modal-actions">
-          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save'}
+          <button className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? "Saving…" : "Save"}
           </button>
         </div>
       </div>
     </div>
-  )
+  );
 }
