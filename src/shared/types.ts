@@ -108,7 +108,12 @@ export type ConnectorSource =
   | "confluence"
   | "slack"
   | "coda"
-  | "figma";
+  | "figma"
+  | "notion";
+
+export interface NotionConfig {
+  apiToken: string;
+}
 
 export interface LinearConfig {
   apiKey?: string;
@@ -136,9 +141,23 @@ export interface FigmaConfig {
   personalAccessToken: string;
 }
 
+export type ConnectorStrategy = "mcp" | "api-key" | "oauth";
+
+export interface StrategyStatus {
+  strategy: ConnectorStrategy;
+  /** Whether this strategy is available to use (e.g. MCP server found in config) */
+  available: boolean;
+  /** Whether credentials/connection are configured and working */
+  configured: boolean;
+  /** Human-readable description (e.g. "via linear in Claude Code") */
+  detail?: string;
+}
+
 export interface ConnectorStatus {
   source: ConnectorSource;
   configured: boolean;
+  /** Active strategy in use — determined by priority: mcp > api-key/oauth */
+  activeStrategy?: ConnectorStrategy;
   maskedKey?: string;
   publicFields?: Record<string, string>;
 }
@@ -284,6 +303,7 @@ export type WindowApi = {
   };
   connectors: {
     list: () => Promise<ConnectorStatus[]>;
+    strategies: (source: ConnectorSource) => Promise<StrategyStatus[]>;
     set: (source: ConnectorSource, config: unknown) => Promise<void>;
     remove: (source: ConnectorSource) => Promise<void>;
     test: (

@@ -77,6 +77,8 @@ const api: WindowApi = {
   },
   connectors: {
     list: () => ipcRenderer.invoke("connectors:list"),
+    strategies: (source: ConnectorSource) =>
+      ipcRenderer.invoke("connectors:strategies", source),
     set: (source: ConnectorSource, config: unknown) =>
       ipcRenderer.invoke("connectors:set", source, config),
     remove: (source: ConnectorSource) =>

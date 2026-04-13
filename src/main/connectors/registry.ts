@@ -1,10 +1,18 @@
 import { deleteSecret, getSecret, setSecret } from "../secrets";
+import { discoverMcpServers } from "../mcp/discovery";
 import { codaConnector } from "./coda";
 import { confluenceConnector } from "./confluence";
 import { figmaConnector } from "./figma";
 import { jiraConnector } from "./jira";
 import { linearConnector } from "./linear";
+import { notionConnector } from "./notion";
 import { slackConnector } from "./slack";
+import {
+  detectStrategies,
+  resolveActiveStrategy,
+  hydrateViaMcp,
+  SUPPORTED_STRATEGIES,
+} from "./strategy";
 import { err } from "./types";
 import type { Connector } from "./types";
 import type {
@@ -12,10 +20,12 @@ import type {
   ConnectorStatus,
   ConnectorTestResult,
   LinkStatus,
+  StrategyStatus,
 } from "../../shared/types";
 
 const CONNECTORS: Connector[] = [
   linearConnector,
+  notionConnector,
   jiraConnector,
   confluenceConnector,
   slackConnector,
@@ -68,20 +78,39 @@ export function resolveConnector(url: string): Connector | undefined {
 }
 
 export function listConnectors(): ConnectorStatus[] {
+  const mcpServers = discoverMcpServers();
   return CONNECTORS.map((c) => {
     const raw = getSecret(secretKey(c.source));
+    const hasMcp =
+      mcpServers.has(c.source) &&
+      SUPPORTED_STRATEGIES[c.source].includes("mcp");
+    const activeStrategy =
+      resolveActiveStrategy(c.source, mcpServers) ?? undefined;
     return {
       source: c.source,
-      configured: raw !== undefined,
+      configured: raw !== undefined || hasMcp,
+      activeStrategy,
       maskedKey: pickMaskedKey(raw, c.secretFields),
       publicFields: pickPublicFields(raw, c.secretFields),
     };
   });
 }
 
+export function listConnectorStrategies(
+  source: ConnectorSource,
+): Promise<StrategyStatus[]> {
+  return detectStrategies(source);
+}
+
 export async function hydrateOne(url: string): Promise<LinkStatus> {
   const connector = resolveConnector(url);
   if (!connector) return err("unsupported");
+
+  // Try MCP strategy first — returns null if not active
+  const mcpResult = await hydrateViaMcp(connector.source, url);
+  if (mcpResult !== null) return mcpResult;
+
+  // Fall back to direct API connector
   const config = getSecret(secretKey(connector.source));
   if (!config) return err("not-configured");
   return connector.hydrate(url, config);

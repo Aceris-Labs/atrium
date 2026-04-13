@@ -29,6 +29,7 @@ import { getAgentStatuses, listAvailableSessions } from "./agents";
 import { listDirs } from "./fs";
 import {
   listConnectors,
+  listConnectorStrategies,
   removeConnectorConfig,
   setConnectorConfig,
   testConnector,
@@ -141,6 +142,9 @@ export function registerIpcHandlers(): void {
 
   // ── Connectors ───────────────────────────────────────────────────────────
   ipcMain.handle("connectors:list", () => listConnectors());
+  ipcMain.handle("connectors:strategies", (_, source: ConnectorSource) =>
+    listConnectorStrategies(source),
+  );
   ipcMain.handle(
     "connectors:set",
     (_, source: ConnectorSource, config: unknown) =>
@@ -165,7 +169,10 @@ export function registerIpcHandlers(): void {
       if (result.ok) setConnectorConfig(source, config);
       return result;
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : "OAuth failed" };
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : "OAuth failed",
+      };
     }
   });
 

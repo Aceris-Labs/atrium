@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import type {
   ConnectorSource,
   ConnectorStatus,
+  ConnectorStrategy,
   ConnectorTestResult,
+  StrategyStatus,
 } from "../../../shared/types";
 
 interface ConnectorField {
@@ -28,6 +30,22 @@ const CONNECTORS: ConnectorMeta[] = [
     name: "Linear",
     fields: [],
     oauth: true,
+  },
+  {
+    source: "notion",
+    name: "Notion",
+    createUrl: "https://www.notion.so/my-integrations",
+    createLabel: "Create a Notion integration →",
+    fields: [
+      {
+        name: "apiToken",
+        label: "Internal integration token",
+        type: "password",
+        placeholder: "ntn_...",
+      },
+    ],
+    helpText:
+      "Create an internal integration, then share each page/database you want to link with it.",
   },
   {
     source: "jira",
@@ -112,6 +130,17 @@ const CONNECTORS: ConnectorMeta[] = [
   },
 ];
 
+function strategyLabel(strategy: ConnectorStrategy): string {
+  switch (strategy) {
+    case "mcp":
+      return "MCP";
+    case "api-key":
+      return "API Key";
+    case "oauth":
+      return "OAuth";
+  }
+}
+
 export function ConnectorsPanel() {
   const [statuses, setStatuses] = useState<ConnectorStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,11 +211,26 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
   const [result, setResult] = useState<ConnectorTestResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [strategies, setStrategies] = useState<StrategyStatus[] | null>(null);
+  const [loadingStrategies, setLoadingStrategies] = useState(false);
 
   useEffect(() => {
     setValues(initialValues(meta, status));
     setResult(null);
   }, [status.configured, JSON.stringify(status.publicFields ?? {})]);
+
+  // Load strategies when row is expanded
+  useEffect(() => {
+    if (!expanded || strategies !== null) return;
+    setLoadingStrategies(true);
+    window.api.connectors
+      .strategies(meta.source)
+      .then((s) => {
+        setStrategies(s);
+        setLoadingStrategies(false);
+      })
+      .catch(() => setLoadingStrategies(false));
+  }, [expanded, meta.source, strategies]);
 
   function setField(name: string, value: string) {
     setValues((prev) => ({ ...prev, [name]: value }));
@@ -224,6 +268,8 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
       if (!r.ok) return;
       await window.api.connectors.set(meta.source, cfg);
       await onChange();
+      // Refresh strategies after saving new credentials
+      setStrategies(null);
     } finally {
       setSaving(false);
     }
@@ -232,6 +278,7 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
   async function handleDisconnect() {
     await window.api.connectors.remove(meta.source);
     setResult(null);
+    setStrategies(null);
     await onChange();
   }
 
@@ -240,9 +287,14 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
     setResult(null);
     const r = await window.api.connectors.startOAuth(meta.source);
     setResult(r);
-    if (r.ok) await onChange();
+    if (r.ok) {
+      await onChange();
+      setStrategies(null);
+    }
     setConnecting(false);
   }
+
+  const mcpStrategy = strategies?.find((s) => s.strategy === "mcp");
 
   return (
     <div className="border border-line rounded-sm bg-bg-card">
@@ -258,27 +310,63 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
           ) : (
             <span className="text-xs text-fg-muted">Not connected</span>
           )}
-          {status.configured && status.publicFields?.domain && (
-            <span className="text-xs text-fg-muted truncate">
-              {status.publicFields.domain}
+          {status.activeStrategy && (
+            <span className="text-xs text-fg-muted bg-bg-input px-1 rounded-sm">
+              {strategyLabel(status.activeStrategy)}
             </span>
           )}
-          {status.configured && status.maskedKey && (
-            <span className="text-xs text-fg-muted font-['SF_Mono','Fira_Code',monospace]">
-              {status.maskedKey}
-            </span>
+          {status.configured && status.activeStrategy !== "mcp" && (
+            <>
+              {status.publicFields?.domain && (
+                <span className="text-xs text-fg-muted truncate">
+                  {status.publicFields.domain}
+                </span>
+              )}
+              {status.maskedKey && (
+                <span className="text-xs text-fg-muted font-['SF_Mono','Fira_Code',monospace]">
+                  {status.maskedKey}
+                </span>
+              )}
+            </>
           )}
         </div>
         <span className="text-xs text-fg-muted">{expanded ? "▾" : "▸"}</span>
       </button>
 
       {expanded && (
-        <div className="flex flex-col gap-2 px-3 pb-3 pt-1 border-t border-line">
-          {meta.oauth ? (
-            <>
+        <div className="flex flex-col gap-3 px-3 pb-3 pt-2 border-t border-line">
+          {/* Strategy detection */}
+          {loadingStrategies ? (
+            <p className="text-xs text-fg-muted">
+              Detecting available methods…
+            </p>
+          ) : strategies ? (
+            <StrategySection
+              strategies={strategies}
+              mcpConfigured={mcpStrategy?.configured ?? false}
+            />
+          ) : null}
+
+          {/* MCP — no config needed, just status */}
+          {mcpStrategy?.available && (
+            <div className="flex flex-col gap-1">
               <p className="text-xs text-fg-muted">
-                Connects via OAuth — your browser will open to authorize Atrium.
+                {mcpStrategy.configured
+                  ? `MCP server connected${mcpStrategy.detail ? ` (${mcpStrategy.detail})` : ""}.`
+                  : `MCP server found${mcpStrategy.detail ? ` (${mcpStrategy.detail})` : ""} but not responding.`}
               </p>
+            </div>
+          )}
+
+          {/* OAuth strategy */}
+          {meta.oauth && (
+            <div className="flex flex-col gap-1">
+              {!mcpStrategy?.available && (
+                <p className="text-xs text-fg-muted">
+                  Connect via OAuth — your browser will open to authorize
+                  Atrium.
+                </p>
+              )}
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -288,23 +376,17 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
                 >
                   {connecting
                     ? "Waiting for browser…"
-                    : status.configured
+                    : status.configured && status.activeStrategy === "oauth"
                       ? "Reconnect"
                       : "Connect with Linear"}
                 </button>
-                {status.configured && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={handleDisconnect}
-                  >
-                    Disconnect
-                  </button>
-                )}
               </div>
-            </>
-          ) : (
-            <>
+            </div>
+          )}
+
+          {/* API key strategy */}
+          {meta.fields.length > 0 && (
+            <div className="flex flex-col gap-2">
               {meta.createUrl && meta.createLabel && (
                 <div>
                   <button
@@ -359,7 +441,7 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
                 >
                   {saving ? "Saving…" : "Save"}
                 </button>
-                {status.configured && (
+                {status.configured && status.activeStrategy !== "mcp" && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
@@ -369,8 +451,21 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
                   </button>
                 )}
               </div>
-            </>
+            </div>
           )}
+
+          {/* Disconnect for OAuth/MCP-only connectors */}
+          {meta.fields.length === 0 &&
+            status.configured &&
+            status.activeStrategy !== "mcp" && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm self-start"
+                onClick={handleDisconnect}
+              >
+                Disconnect
+              </button>
+            )}
 
           {result && (
             <div className={`text-xs ${result.ok ? "text-green" : "text-red"}`}>
@@ -380,6 +475,49 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+interface StrategySectionProps {
+  strategies: StrategyStatus[];
+  mcpConfigured: boolean;
+}
+
+function StrategySection({ strategies, mcpConfigured }: StrategySectionProps) {
+  if (strategies.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-xs text-fg-muted font-medium">Connection methods</p>
+      <div className="flex flex-col gap-[2px]">
+        {strategies.map((s) => (
+          <div key={s.strategy} className="flex items-center gap-2">
+            <span
+              className={`text-xs w-[52px] ${s.configured ? "text-green" : s.available ? "text-fg-muted" : "text-fg-muted opacity-40"}`}
+            >
+              {strategyLabel(s.strategy)}
+            </span>
+            <span className="text-xs text-fg-muted">
+              {s.configured ? (
+                <span className="text-green">
+                  ✓{s.detail ? ` ${s.detail}` : ""}
+                </span>
+              ) : s.available ? (
+                (s.detail ?? "available, not configured")
+              ) : (
+                "not available"
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+      {!mcpConfigured && (
+        <p className="text-xs text-fg-muted mt-1">
+          Tip: add an MCP server for this service in Claude Code to connect
+          without API keys.
+        </p>
       )}
     </div>
   );
