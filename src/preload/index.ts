@@ -83,6 +83,8 @@ const api: WindowApi = {
       ipcRenderer.invoke("connectors:remove", source),
     test: (source: ConnectorSource, config?: unknown) =>
       ipcRenderer.invoke("connectors:test", source, config),
+    startOAuth: (source: ConnectorSource) =>
+      ipcRenderer.invoke("connectors:oauth", source),
   },
   links: {
     hydrate: (urls: string[]) => ipcRenderer.invoke("links:hydrate", urls),

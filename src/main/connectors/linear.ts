@@ -36,8 +36,15 @@ function mapState(type: string | undefined): LinkStatusKind {
   }
 }
 
+function authHeader(config: LinearConfig): string {
+  // OAuth tokens use Bearer prefix; personal API keys do not.
+  if (config.oauthToken) return `Bearer ${config.oauthToken}`;
+  if (config.apiKey) return config.apiKey;
+  return "";
+}
+
 async function gql(
-  apiKey: string,
+  config: LinearConfig,
   query: string,
   variables?: Record<string, unknown>,
 ): Promise<Response> {
@@ -48,8 +55,7 @@ async function gql(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        // Linear personal API keys go in the Authorization header without a Bearer prefix.
-        Authorization: apiKey,
+        Authorization: authHeader(config),
       },
       body: JSON.stringify({ query, variables }),
       signal: controller.signal,
@@ -61,7 +67,7 @@ async function gql(
 
 export const linearConnector: Connector<LinearConfig> = {
   source: "linear",
-  secretFields: ["apiKey"],
+  secretFields: ["apiKey", "oauthToken"],
 
   match: (url) => LINEAR_URL_RE.test(url),
 
@@ -70,7 +76,7 @@ export const linearConnector: Connector<LinearConfig> = {
     if (!match) return err("unsupported");
     const issueId = match[1];
     try {
-      const res = await gql(config.apiKey, ISSUE_QUERY, { id: issueId });
+      const res = await gql(config, ISSUE_QUERY, { id: issueId });
       if (res.status === 401 || res.status === 403) return err("auth");
       if (res.status === 429) return err("rate-limited");
       if (!res.ok) return err("network");
@@ -101,11 +107,11 @@ export const linearConnector: Connector<LinearConfig> = {
   },
 
   async test(config) {
-    if (!config?.apiKey?.trim()) {
-      return { ok: false, error: "API key is empty" };
+    if (!config?.apiKey?.trim() && !config?.oauthToken?.trim()) {
+      return { ok: false, error: "No credentials configured" };
     }
     try {
-      const res = await gql(config.apiKey, VIEWER_QUERY);
+      const res = await gql(config, VIEWER_QUERY);
       if (res.status === 401 || res.status === 403) {
         return { ok: false, error: "Invalid API key" };
       }

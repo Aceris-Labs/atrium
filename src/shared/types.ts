@@ -6,7 +6,7 @@ export interface WorkspacePR {
 export interface Workspace {
   id: string;
   title: string;
-  type: "note" | "task" | "project";
+  type: "feature" | "research" | "bug";
   status: "active" | "blocked" | "done" | "archived";
   repo?: string; // "owner/repo" — the primary/default repo for this workspace
   branch?: string;
@@ -111,7 +111,8 @@ export type ConnectorSource =
   | "figma";
 
 export interface LinearConfig {
-  apiKey: string;
+  apiKey?: string;
+  oauthToken?: string;
 }
 
 export interface AtlassianConfig {
@@ -289,6 +290,7 @@ export type WindowApi = {
       source: ConnectorSource,
       config?: unknown,
     ) => Promise<ConnectorTestResult>;
+    startOAuth: (source: ConnectorSource) => Promise<ConnectorTestResult>;
   };
   links: {
     hydrate: (urls: string[]) => Promise<Record<string, LinkStatus>>;

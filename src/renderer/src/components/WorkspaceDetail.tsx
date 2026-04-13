@@ -700,6 +700,22 @@ export function WorkspaceDetail({
                   <option value="archived">archived</option>
                 </select>
               </div>
+              <div className="detail-field-group">
+                <label className="form-label">Type</label>
+                <select
+                  className="form-select"
+                  value={workspace.type}
+                  onChange={(e) =>
+                    handleFieldUpdate({
+                      type: e.target.value as Workspace["type"],
+                    })
+                  }
+                >
+                  <option value="feature">feature</option>
+                  <option value="research">research</option>
+                  <option value="bug">bug</option>
+                </select>
+              </div>
             </div>
             <div className="detail-field-group" style={{ marginTop: 10 }}>
               <label className="form-label">Directory</label>

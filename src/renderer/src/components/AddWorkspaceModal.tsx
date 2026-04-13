@@ -14,7 +14,7 @@ export function AddWorkspaceModal({
   onClose,
 }: Props) {
   const [title, setTitle] = useState("");
-  const [type, setType] = useState<Workspace["type"]>("project");
+  const [type, setType] = useState<Workspace["type"]>("feature");
   const [directoryPath, setDirectoryPath] = useState<string | undefined>(
     defaultDirectoryPath,
   );
@@ -59,9 +59,9 @@ export function AddWorkspaceModal({
               value={type}
               onChange={(e) => setType(e.target.value as Workspace["type"])}
             >
-              <option value="project">project</option>
-              <option value="task">task</option>
-              <option value="note">note</option>
+              <option value="feature">feature</option>
+              <option value="research">research</option>
+              <option value="bug">bug</option>
             </select>
           </div>
 

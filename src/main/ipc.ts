@@ -33,6 +33,7 @@ import {
   setConnectorConfig,
   testConnector,
 } from "./connectors/registry";
+import { startLinearOAuth } from "./oauth/linear";
 import { hydrateLinks, refreshLink } from "./linkHydration";
 import type {
   Workspace,
@@ -153,6 +154,20 @@ export function registerIpcHandlers(): void {
     (_, source: ConnectorSource, config?: unknown) =>
       testConnector(source, config),
   );
+  ipcMain.handle("connectors:oauth", async (_, source: ConnectorSource) => {
+    if (source !== "linear") {
+      return { ok: false, error: "OAuth not supported for this connector" };
+    }
+    try {
+      const { oauthToken } = await startLinearOAuth();
+      const config = { oauthToken };
+      const result = await testConnector(source, config);
+      if (result.ok) setConnectorConfig(source, config);
+      return result;
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "OAuth failed" };
+    }
+  });
 
   // ── Link hydration ───────────────────────────────────────────────────────
   ipcMain.handle("links:hydrate", (_, urls: string[]) => hydrateLinks(urls));

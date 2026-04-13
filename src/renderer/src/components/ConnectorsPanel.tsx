@@ -15,26 +15,19 @@ interface ConnectorField {
 interface ConnectorMeta {
   source: ConnectorSource;
   name: string;
-  createUrl: string;
-  createLabel: string;
+  createUrl?: string;
+  createLabel?: string;
   fields: ConnectorField[];
   helpText?: string;
+  oauth?: boolean;
 }
 
 const CONNECTORS: ConnectorMeta[] = [
   {
     source: "linear",
     name: "Linear",
-    createUrl: "https://linear.app/settings/api",
-    createLabel: "Create a Linear API key →",
-    fields: [
-      {
-        name: "apiKey",
-        label: "Personal API key",
-        type: "password",
-        placeholder: "lin_api_...",
-      },
-    ],
+    fields: [],
+    oauth: true,
   },
   {
     source: "jira",
@@ -188,9 +181,8 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<ConnectorTestResult | null>(null);
   const [saving, setSaving] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
-  // If the stored config changes (e.g. after Save/Disconnect) reseed the
-  // public fields so the form reflects what's on disk.
   useEffect(() => {
     setValues(initialValues(meta, status));
     setResult(null);
@@ -216,8 +208,6 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
   async function handleTest() {
     setTesting(true);
     setResult(null);
-    // If any secret field is filled use the form values; otherwise test
-    // the stored config.
     const cfg = anySecretFilled ? buildConfig() : undefined;
     const r = await window.api.connectors.test(meta.source, cfg);
     setResult(r);
@@ -243,6 +233,15 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
     await window.api.connectors.remove(meta.source);
     setResult(null);
     await onChange();
+  }
+
+  async function handleOAuth() {
+    setConnecting(true);
+    setResult(null);
+    const r = await window.api.connectors.startOAuth(meta.source);
+    setResult(r);
+    if (r.ok) await onChange();
+    setConnecting(false);
   }
 
   return (
@@ -275,66 +274,103 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
 
       {expanded && (
         <div className="flex flex-col gap-2 px-3 pb-3 pt-1 border-t border-line">
-          <div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => window.api.shell.openExternal(meta.createUrl)}
-            >
-              {meta.createLabel}
-            </button>
-          </div>
+          {meta.oauth ? (
+            <>
+              <p className="text-xs text-fg-muted">
+                Connects via OAuth — your browser will open to authorize Atrium.
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={handleOAuth}
+                  disabled={connecting}
+                >
+                  {connecting
+                    ? "Waiting for browser…"
+                    : status.configured
+                      ? "Reconnect"
+                      : "Connect with Linear"}
+                </button>
+                {status.configured && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={handleDisconnect}
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              {meta.createUrl && meta.createLabel && (
+                <div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() =>
+                      window.api.shell.openExternal(meta.createUrl!)
+                    }
+                  >
+                    {meta.createLabel}
+                  </button>
+                </div>
+              )}
 
-          {meta.helpText && (
-            <p className="text-xs text-fg-muted">{meta.helpText}</p>
+              {meta.helpText && (
+                <p className="text-xs text-fg-muted">{meta.helpText}</p>
+              )}
+
+              {meta.fields.map((field) => (
+                <div key={field.name} className="flex flex-col gap-1">
+                  <label className="text-xs text-fg-muted">{field.label}</label>
+                  <input
+                    type={field.type}
+                    className="form-input"
+                    value={values[field.name]}
+                    onChange={(e) => setField(field.name, e.target.value)}
+                    placeholder={
+                      field.type === "password" && status.configured
+                        ? "Enter a new token to replace"
+                        : field.placeholder
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
+              ))}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={handleTest}
+                  disabled={testing || (!anySecretFilled && !status.configured)}
+                >
+                  {testing ? "Testing…" : "Test"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={handleSave}
+                  disabled={saving || !allFilled}
+                >
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                {status.configured && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={handleDisconnect}
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </div>
+            </>
           )}
-
-          {meta.fields.map((field) => (
-            <div key={field.name} className="flex flex-col gap-1">
-              <label className="text-xs text-fg-muted">{field.label}</label>
-              <input
-                type={field.type}
-                className="form-input"
-                value={values[field.name]}
-                onChange={(e) => setField(field.name, e.target.value)}
-                placeholder={
-                  field.type === "password" && status.configured
-                    ? "Enter a new token to replace"
-                    : field.placeholder
-                }
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </div>
-          ))}
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={handleTest}
-              disabled={testing || (!anySecretFilled && !status.configured)}
-            >
-              {testing ? "Testing…" : "Test"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={handleSave}
-              disabled={saving || !allFilled}
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-            {status.configured && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={handleDisconnect}
-              >
-                Disconnect
-              </button>
-            )}
-          </div>
 
           {result && (
             <div className={`text-xs ${result.ok ? "text-green" : "text-red"}`}>

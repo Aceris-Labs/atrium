@@ -245,17 +245,17 @@ body,
   padding: 2px 7px;
 }
 
-.card-type-badge.project {
+.card-type-badge.feature {
   @apply text-blue;
   background: #1f3a5f;
 }
-.card-type-badge.task {
-  @apply text-orange;
-  background: #2d2a1f;
+.card-type-badge.research {
+  @apply text-purple;
+  background: #2a1f3a;
 }
-.card-type-badge.note {
-  @apply text-green;
-  background: #1f2d1f;
+.card-type-badge.bug {
+  @apply text-red;
+  background: #3a1f1f;
 }
 
 /* PR list */

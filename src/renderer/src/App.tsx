@@ -7,7 +7,12 @@ import { SetupWizard } from "./components/SetupWizard";
 import { PRCard } from "./components/PRCard";
 import { WingTabs } from "./components/WingTabs";
 import { CreateWingModal } from "./components/CreateWingModal";
-import type { PRStatus, Workspace, Wing, WorkspacePR } from "../../shared/types";
+import type {
+  PRStatus,
+  Workspace,
+  Wing,
+  WorkspacePR,
+} from "../../shared/types";
 
 export default function App() {
   const [wings, setWings] = useState<Wing[]>([]);
@@ -193,7 +198,9 @@ export default function App() {
     );
     if (status) {
       setWatchedPRStatuses((prev) => {
-        if (prev.find((p) => p.repo === status.repo && p.number === status.number))
+        if (
+          prev.find((p) => p.repo === status.repo && p.number === status.number)
+        )
           return prev;
         return [...prev, status];
       });
@@ -269,14 +276,13 @@ export default function App() {
     setSelectedId(null);
   }
 
-  const allPRs = [...myPRs, ...reviewPRs, ...linkedPRStatuses].reduce<PRStatus[]>(
-    (acc, pr) => {
-      if (!acc.find((p) => p.number === pr.number && p.repo === pr.repo))
-        acc.push(pr);
-      return acc;
-    },
-    [],
-  );
+  const allPRs = [...myPRs, ...reviewPRs, ...linkedPRStatuses].reduce<
+    PRStatus[]
+  >((acc, pr) => {
+    if (!acc.find((p) => p.number === pr.number && p.repo === pr.repo))
+      acc.push(pr);
+    return acc;
+  }, []);
 
   function prKey(pr: PRStatus): string {
     return `${pr.repo ?? ""}-${pr.number}`;
@@ -503,6 +509,27 @@ export default function App() {
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title">Pull Requests</span>
+            <div className="flex items-center gap-2">
+              <input
+                className="form-input form-input-sm"
+                value={watchInput}
+                onChange={(e) => {
+                  setWatchInput(e.target.value);
+                  setWatchError("");
+                }}
+                onKeyDown={(e) => e.key === "Enter" && handleAddWatched()}
+                placeholder="PR # or URL"
+              />
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleAddWatched}
+              >
+                Watch
+              </button>
+              {watchError && (
+                <span className="pr-input-error">{watchError}</span>
+              )}
+            </div>
           </div>
           <div className="panel-body">
             {unlinkedReviews.length > 0 && (
@@ -556,27 +583,6 @@ export default function App() {
                     {watchedPRStatuses.length}
                   </span>
                 )}
-                <div className="section-header-right">
-                  <input
-                    className="form-input form-input-sm"
-                    value={watchInput}
-                    onChange={(e) => {
-                      setWatchInput(e.target.value);
-                      setWatchError("");
-                    }}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddWatched()}
-                    placeholder="PR # or URL"
-                  />
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={handleAddWatched}
-                  >
-                    Watch
-                  </button>
-                  {watchError && (
-                    <span className="pr-input-error">{watchError}</span>
-                  )}
-                </div>
               </div>
               {(watchedPRStatuses.length > 0 || loadingWatched.length > 0) && (
                 <div className="card-grid card-grid-sm">

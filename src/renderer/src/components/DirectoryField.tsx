@@ -76,7 +76,7 @@ export function DirectoryField({ directoryPath, branch, onChange }: Props) {
       <PathInput
         value={localPath}
         onChange={setLocalPath}
-        placeholder="~/personal-projects/odyssey"
+        placeholder="~/personal-projects/myproject"
       />
       {repoInfo.isRepo && repoInfo.branches && repoInfo.branches.length > 0 && (
         <div className="flex items-center gap-2">
