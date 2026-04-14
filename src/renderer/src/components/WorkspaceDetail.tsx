@@ -12,6 +12,16 @@ import type {
   LinkStatusKind,
 } from "../../../shared/types";
 
+type Section =
+  | "prs"
+  | "notes"
+  | "todos"
+  | "documents"
+  | "tickets"
+  | "slack"
+  | "other"
+  | "settings";
+
 interface Props {
   wingId: string;
   workspace: Workspace;
@@ -28,14 +38,10 @@ interface Props {
 }
 
 function parsePRInput(input: string): { number: number; repo?: string } | null {
-  // Full GitHub URL: https://github.com/owner/repo/pull/123
   const urlMatch = input.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
   if (urlMatch) return { repo: urlMatch[1], number: parseInt(urlMatch[2], 10) };
-
-  // Plain number
   const num = parseInt(input, 10);
   if (!isNaN(num) && num > 0) return { number: num };
-
   return null;
 }
 
@@ -70,6 +76,7 @@ export function WorkspaceDetail({
     ? workspace.notes
     : [];
   const linkItems: WorkspaceLink[] = workspace.links ?? [];
+
   const [todoInput, setTodoInput] = useState("");
   const [noteInput, setNoteInput] = useState("");
   const [linkInput, setLinkInput] = useState("");
@@ -85,23 +92,44 @@ export function WorkspaceDetail({
   const [linkHydrations, setLinkHydrations] = useState<
     Record<string, LinkStatus>
   >({});
+  const [availableSessions, setAvailableSessions] = useState<
+    { name: string; status: string }[]
+  >([]);
+  const [showSessionPicker, setShowSessionPicker] = useState(false);
+
   const titleInputRef = useRef<HTMLInputElement>(null);
+
+  // Derived link groups
+  const docLinks = linkItems.filter((l) => l.category === "docs");
+  const ticketLinks = linkItems.filter((l) => l.category === "tickets");
+  const slackLinks = linkItems.filter((l) => l.source === "slack");
+  const otherLinks = linkItems.filter(
+    (l) => l.category === "other" && l.source !== "slack",
+  );
+  const openTodos = todos.filter((t) => !t.done);
+
+  const [activeSection, setActiveSection] = useState<Section>(() => {
+    if (workspace.prs.length > 0) return "prs";
+    if (todos.some((t) => !t.done)) return "todos";
+    if (noteItems.length > 0) return "notes";
+    return "prs";
+  });
+
+  const navItems: { id: Section; label: string; count?: number }[] = [
+    { id: "prs", label: "Pull Requests", count: workspace.prs.length },
+    { id: "todos", label: "Todos", count: openTodos.length },
+    { id: "notes", label: "Notes", count: noteItems.length },
+    { id: "documents", label: "Documents", count: docLinks.length },
+    { id: "tickets", label: "Tickets", count: ticketLinks.length },
+    { id: "slack", label: "Slack", count: slackLinks.length },
+    { id: "other", label: "Other", count: otherLinks.length },
+    { id: "settings", label: "Settings", count: undefined },
+  ];
 
   useEffect(() => {
     if (editingTitle) titleInputRef.current?.select();
   }, [editingTitle]);
 
-  function commitRename() {
-    const trimmed = titleDraft.trim();
-    if (trimmed && trimmed !== workspace.title) {
-      onUpdate({ ...workspace, title: trimmed });
-    } else {
-      setTitleDraft(workspace.title);
-    }
-    setEditingTitle(false);
-  }
-
-  // Fetch any linked PRs not covered by the global sync
   useEffect(() => {
     async function fetchMissing() {
       const allKnown = [...prStatuses, ...fetchedPRs];
@@ -110,7 +138,6 @@ export function WorkspaceDetail({
           !allKnown.find((k) => k.repo === p.repo && k.number === p.number),
       );
       if (missing.length === 0) return;
-
       const results = await Promise.all(
         missing.map((p) => window.api.github.fetchPR(p.repo, p.number)),
       );
@@ -120,8 +147,6 @@ export function WorkspaceDetail({
     fetchMissing();
   }, [workspace.id, workspace.prs, prStatuses]);
 
-  // Hydrate link metadata on mount and every 5 min. Cached entries come
-  // back immediately so the UI doesn't flash empty.
   useEffect(() => {
     const urls = (workspace.links ?? []).map((l) => l.url);
     if (urls.length === 0) {
@@ -141,6 +166,10 @@ export function WorkspaceDetail({
     };
   }, [workspace.id, workspace.links]);
 
+  useEffect(() => {
+    window.api.agents.sessions().then(setAvailableSessions);
+  }, [workspace.id]);
+
   async function handleRefreshLinks() {
     const urls = (workspace.links ?? []).map((l) => l.url);
     const results = await Promise.all(
@@ -149,6 +178,16 @@ export function WorkspaceDetail({
     const next: Record<string, LinkStatus> = {};
     urls.forEach((url, i) => (next[url] = results[i]));
     setLinkHydrations(next);
+  }
+
+  function commitRename() {
+    const trimmed = titleDraft.trim();
+    if (trimmed && trimmed !== workspace.title) {
+      onUpdate({ ...workspace, title: trimmed });
+    } else {
+      setTitleDraft(workspace.title);
+    }
+    setEditingTitle(false);
   }
 
   function handleAddTodo() {
@@ -160,10 +199,10 @@ export function WorkspaceDetail({
   }
 
   function handleToggleTodo(id: string) {
-    const updated = todos.map((t) =>
-      t.id === id ? { ...t, done: !t.done } : t,
-    );
-    onUpdate({ ...workspace, todos: updated });
+    onUpdate({
+      ...workspace,
+      todos: todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
+    });
   }
 
   function handleDeleteTodo(id: string) {
@@ -258,8 +297,6 @@ export function WorkspaceDetail({
       setPrInputError("Paste a GitHub PR URL or enter a number");
       return;
     }
-
-    // Resolve repo: URL-qualified → workspace.repo → wing default.
     let repo = parsed.repo ?? workspace.repo;
     if (!repo)
       repo = (await window.api.github.defaultRepo(wingId)) ?? undefined;
@@ -267,14 +304,12 @@ export function WorkspaceDetail({
       setPrInputError("Set a repo for this workspace or the wing first");
       return;
     }
-
     if (
       workspace.prs.some((p) => p.repo === repo && p.number === parsed.number)
     ) {
       setPrInputError("Already linked");
       return;
     }
-
     const updatedWorkspace = {
       ...workspace,
       prs: [...workspace.prs, { repo, number: parsed.number }],
@@ -283,8 +318,6 @@ export function WorkspaceDetail({
     onUpdate(updatedWorkspace);
     setPrInput("");
     setPrInputError("");
-
-    // Fetch status immediately — don't wait for the effect cycle
     if (
       !allKnownPRs.find((p) => p.repo === repo && p.number === parsed.number)
     ) {
@@ -326,15 +359,6 @@ export function WorkspaceDetail({
   const linkedPRs = allKnownPRs.filter((pr) =>
     linkedKeys.has(`${pr.repo ?? ""}-${pr.number}`),
   );
-  const [availableSessions, setAvailableSessions] = useState<
-    { name: string; status: string }[]
-  >([]);
-  const [showSessionPicker, setShowSessionPicker] = useState(false);
-
-  useEffect(() => {
-    window.api.agents.sessions().then(setAvailableSessions);
-  }, [workspace.id]);
-
   const tmuxRunning = workspace.tmuxSession
     ? tmuxSessions.includes(workspace.tmuxSession)
     : false;
@@ -378,7 +402,95 @@ export function WorkspaceDetail({
           <span className={`card-type-badge ${workspace.type}`}>
             {workspace.type}
           </span>
-          <div className="gear-menu-wrapper">
+
+          {/* Launch controls inline with title */}
+          <div className="flex items-center gap-2 ml-4">
+            <button className="btn btn-primary btn-sm" onClick={handleLaunch}>
+              Launch
+            </button>
+            {tmuxRunning && (
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ color: "var(--red)", borderColor: "var(--red)33" }}
+                onClick={handleStop}
+              >
+                Stop
+              </button>
+            )}
+            <div className="session-picker-wrapper">
+              <button
+                className="session-picker-trigger"
+                onClick={() => {
+                  setShowSessionPicker(!showSessionPicker);
+                  window.api.agents.sessions().then(setAvailableSessions);
+                }}
+              >
+                <div className={`tmux-dot ${tmuxRunning ? "running" : ""}`} />
+                {workspace.tmuxSession
+                  ? `tmux: ${workspace.tmuxSession}`
+                  : "Link session…"}
+              </button>
+              {showSessionPicker && (
+                <>
+                  <div
+                    className="gear-menu-backdrop"
+                    onClick={() => setShowSessionPicker(false)}
+                  />
+                  <div
+                    className="gear-menu"
+                    style={{ minWidth: 240, left: 0, right: "auto" }}
+                  >
+                    {availableSessions.map((s) => (
+                      <button
+                        key={s.name}
+                        className={`gear-menu-item${workspace.tmuxSession === s.name ? " selected" : ""}`}
+                        onClick={() => {
+                          onUpdate({ ...workspace, tmuxSession: s.name });
+                          setShowSessionPicker(false);
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className={`agent-dot ${s.status}`} />
+                          {s.name}
+                          <span
+                            style={{
+                              marginLeft: "auto",
+                              fontSize: 10,
+                              color: "var(--text-muted)",
+                            }}
+                          >
+                            {s.status}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                    {workspace.tmuxSession && (
+                      <button
+                        className="gear-menu-item"
+                        style={{ color: "var(--text-muted)" }}
+                        onClick={() => {
+                          onUpdate({ ...workspace, tmuxSession: undefined });
+                          setShowSessionPicker(false);
+                        }}
+                      >
+                        Unlink session
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            {agentStatus !== "no-session" && (
+              <div className={`agent-badge ${agentStatus}`}>
+                <div className={`agent-dot ${agentStatus}`} />
+                {agentStatus === "working" && "claude working"}
+                {agentStatus === "needs-input" && "needs input"}
+                {agentStatus === "idle" && "claude idle"}
+              </div>
+            )}
+          </div>
+
+          <div className="gear-menu-wrapper" style={{ marginLeft: "auto" }}>
             <button
               className="gear-btn"
               onClick={() => setShowGearMenu(!showGearMenu)}
@@ -434,6 +546,7 @@ export function WorkspaceDetail({
             )}
           </div>
         </div>
+
         <div className="detail-header-meta">
           {workspace.branch && (
             <span className="detail-meta-item">
@@ -458,447 +571,418 @@ export function WorkspaceDetail({
         </div>
       </div>
 
-      {/* ── Body ────────────────────────────────────────────────── */}
-      <div className="detail-body detail-body-flipped">
-        {/* Left panel: Todos + Notes */}
-        <div className="detail-sidebar">
-          <div className="detail-section" style={{ flex: 1 }}>
-            <div className="detail-section-title">Todos</div>
-            <div className="todo-input-row">
-              <input
-                className="todo-input"
-                value={todoInput}
-                onChange={(e) => setTodoInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddTodo()}
-                placeholder="Add a todo and press Enter…"
-              />
-            </div>
-            <div className="todo-list">
-              {todos
-                .filter((t) => !t.done)
-                .map((todo) => (
-                  <div key={todo.id} className="todo-item">
-                    <input
-                      type="checkbox"
-                      className="todo-checkbox"
-                      checked={false}
-                      onChange={() => handleToggleTodo(todo.id)}
-                    />
-                    <span className="todo-text">{todo.text}</span>
-                    <button
-                      className="todo-delete"
-                      onClick={() => handleDeleteTodo(todo.id)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              {todos
-                .filter((t) => t.done)
-                .map((todo) => (
-                  <div key={todo.id} className="todo-item done">
-                    <input
-                      type="checkbox"
-                      className="todo-checkbox"
-                      checked={true}
-                      onChange={() => handleToggleTodo(todo.id)}
-                    />
-                    <span className="todo-text">{todo.text}</span>
-                    <button
-                      className="todo-delete"
-                      onClick={() => handleDeleteTodo(todo.id)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-            </div>
-          </div>
-
-          {/* Notes */}
-          <div className="detail-section">
-            <div className="section-header">
-              <span className="detail-section-title">Notes</span>
-              <div className="section-header-right">
-                <input
-                  className="form-input form-input-sm"
-                  value={noteInput}
-                  onChange={(e) => setNoteInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
-                  placeholder="Add a note…"
-                />
-              </div>
-            </div>
-            {noteItems.length > 0 && (
-              <div className="note-list">
-                {noteItems.map((note) => (
-                  <div key={note.id} className="note-card">
-                    {editingNoteId === note.id ? (
-                      <input
-                        className="form-input note-edit-input"
-                        value={editingNoteText}
-                        onChange={(e) => setEditingNoteText(e.target.value)}
-                        onBlur={() => handleSaveNoteEdit(note.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleSaveNoteEdit(note.id);
-                          if (e.key === "Escape") setEditingNoteId(null);
-                        }}
-                        autoFocus
-                      />
-                    ) : (
-                      <span
-                        className="note-text"
-                        onClick={() => {
-                          setEditingNoteId(note.id);
-                          setEditingNoteText(note.text);
-                        }}
-                      >
-                        {note.text}
-                      </span>
-                    )}
-                    <span className="note-time">
-                      {new Date(note.createdAt).toLocaleDateString()}
-                    </span>
-                    <button
-                      className="note-delete"
-                      onClick={() => handleDeleteNote(note.id)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Main panel: Launch + Config + PRs */}
-        <div className="detail-main">
-          {/* Launch + Session */}
-          <div className="detail-section">
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                flexWrap: "wrap",
-              }}
+      {/* ── Body: nav + content ─────────────────────────────────── */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Left nav */}
+        <nav className="w-[160px] flex-shrink-0 flex flex-col border-r border-line py-3 px-2 overflow-y-auto gap-px">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setActiveSection(item.id)}
+              className={`flex items-center justify-between w-full px-3 py-[6px] rounded-sm text-sm text-left cursor-pointer border-none bg-transparent ${
+                activeSection === item.id
+                  ? "bg-bg-input text-fg font-medium"
+                  : "text-fg-muted hover:text-fg hover:bg-bg-card-hover"
+              }`}
             >
-              <button className="btn btn-primary" onClick={handleLaunch}>
-                Launch
-              </button>
-              {tmuxRunning && (
-                <button
-                  className="btn btn-ghost"
-                  style={{ color: "var(--red)", borderColor: "var(--red)33" }}
-                  onClick={handleStop}
-                >
-                  Stop
-                </button>
+              <span>{item.label}</span>
+              {item.count !== undefined && item.count > 0 && (
+                <span className="text-xs text-fg-muted tabular-nums">
+                  {item.count}
+                </span>
               )}
+            </button>
+          ))}
+        </nav>
 
-              {/* Session link/picker */}
-              <div className="session-picker-wrapper">
-                <button
-                  className="session-picker-trigger"
-                  onClick={() => {
-                    setShowSessionPicker(!showSessionPicker);
-                    window.api.agents.sessions().then(setAvailableSessions);
-                  }}
-                >
-                  <div className={`tmux-dot ${tmuxRunning ? "running" : ""}`} />
-                  {workspace.tmuxSession
-                    ? `tmux: ${workspace.tmuxSession}`
-                    : "Link session…"}
-                </button>
-                {showSessionPicker && (
-                  <>
-                    <div
-                      className="gear-menu-backdrop"
-                      onClick={() => setShowSessionPicker(false)}
-                    />
-                    <div
-                      className="gear-menu"
-                      style={{ minWidth: 240, left: 0, right: "auto" }}
-                    >
-                      {availableSessions.map((s) => (
-                        <button
-                          key={s.name}
-                          className={`gear-menu-item${workspace.tmuxSession === s.name ? " selected" : ""}`}
-                          onClick={() => {
-                            onUpdate({ ...workspace, tmuxSession: s.name });
-                            setShowSessionPicker(false);
-                          }}
-                        >
-                          <span
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                            }}
-                          >
-                            <span className={`agent-dot ${s.status}`} />
-                            {s.name}
-                            <span
-                              style={{
-                                marginLeft: "auto",
-                                fontSize: 10,
-                                color: "var(--text-muted)",
-                              }}
-                            >
-                              {s.status}
-                            </span>
-                          </span>
-                        </button>
-                      ))}
-                      {workspace.tmuxSession && (
-                        <button
-                          className="gear-menu-item"
-                          style={{ color: "var(--text-muted)" }}
-                          onClick={() => {
-                            onUpdate({ ...workspace, tmuxSession: undefined });
-                            setShowSessionPicker(false);
-                          }}
-                        >
-                          Unlink session
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {agentStatus !== "no-session" && (
-                <div className={`agent-badge ${agentStatus}`}>
-                  <div className={`agent-dot ${agentStatus}`} />
-                  {agentStatus === "working" && "claude working"}
-                  {agentStatus === "needs-input" && "needs input"}
-                  {agentStatus === "idle" && "claude idle"}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Config fields in a horizontal row */}
-          <div className="detail-section">
-            <div className="detail-section-title">Configuration</div>
-            <div className="detail-config-grid">
-              <div className="detail-field-group">
-                <label className="form-label">Status</label>
-                <select
-                  className="form-select"
-                  value={workspace.status}
-                  onChange={(e) =>
-                    handleFieldUpdate({
-                      status: e.target.value as Workspace["status"],
-                    })
-                  }
-                >
-                  <option value="active">active</option>
-                  <option value="blocked">blocked</option>
-                  <option value="done">done</option>
-                  <option value="archived">archived</option>
-                </select>
-              </div>
-              <div className="detail-field-group">
-                <label className="form-label">Type</label>
-                <select
-                  className="form-select"
-                  value={workspace.type}
-                  onChange={(e) =>
-                    handleFieldUpdate({
-                      type: e.target.value as Workspace["type"],
-                    })
-                  }
-                >
-                  <option value="feature">feature</option>
-                  <option value="research">research</option>
-                  <option value="bug">bug</option>
-                </select>
-              </div>
-            </div>
-            <div className="detail-field-group" style={{ marginTop: 10 }}>
-              <label className="form-label">Directory</label>
-              <DirectoryField
-                directoryPath={workspace.directoryPath}
-                branch={workspace.branch}
-                onChange={(next) => {
-                  const update: Partial<Workspace> = {};
-                  if ("directoryPath" in next)
-                    update.directoryPath = next.directoryPath;
-                  if ("branch" in next) update.branch = next.branch;
-                  if (Object.keys(update).length > 0) handleFieldUpdate(update);
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Pull Requests */}
-          <div className="detail-section">
-            <div className="section-header">
-              <span className="detail-section-title">Pull Requests</span>
-              <div className="section-header-right">
-                <input
-                  className="form-input form-input-sm"
-                  value={prInput}
-                  onChange={(e) => {
-                    setPrInput(e.target.value);
-                    setPrInputError("");
-                  }}
-                  onKeyDown={(e) => e.key === "Enter" && handleAddPR()}
-                  placeholder="PR # or URL"
-                />
-                <button className="btn btn-ghost btn-sm" onClick={handleAddPR}>
-                  Link PR
-                </button>
-                {prInputError && (
-                  <span className="pr-input-error">{prInputError}</span>
-                )}
-              </div>
-            </div>
-
-            {workspace.prs.length > 0 ? (
-              <div className="detail-pr-grid">
-                {linkedPRs.map((pr) => (
-                  <div
-                    key={`${pr.repo ?? ""}-${pr.number}`}
-                    className="detail-pr-card-wrapper"
+        {/* Section content */}
+        <div className="flex-1 overflow-y-auto px-7 py-6 flex flex-col gap-6">
+          {/* ── PRs ── */}
+          {activeSection === "prs" && (
+            <div>
+              <div className="section-header">
+                <span className="detail-section-title">Pull Requests</span>
+                <div className="section-header-right">
+                  <input
+                    className="form-input form-input-sm"
+                    value={prInput}
+                    onChange={(e) => {
+                      setPrInput(e.target.value);
+                      setPrInputError("");
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddPR()}
+                    placeholder="PR # or URL"
+                  />
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={handleAddPR}
                   >
-                    <PRCard
-                      pr={pr}
-                      tag={prTag(
-                        pr.number,
-                        reviewPRNumbers,
-                        watchedPRNumbers,
-                        myPRNumbers,
-                      )}
-                      onClick={() => window.api.shell.openExternal(pr.url)}
-                    />
-                    <button
-                      className="detail-pr-remove-overlay"
-                      onClick={() => handleRemovePR(pr.repo ?? "", pr.number)}
-                      title="Unlink PR"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-                {workspace.prs
-                  .filter(
-                    (p) =>
-                      !linkedPRs.find(
-                        (k) => k.repo === p.repo && k.number === p.number,
-                      ),
-                  )
-                  .map((p) => (
+                    Link PR
+                  </button>
+                  {prInputError && (
+                    <span className="pr-input-error">{prInputError}</span>
+                  )}
+                </div>
+              </div>
+              {workspace.prs.length > 0 ? (
+                <div className="detail-pr-grid">
+                  {linkedPRs.map((pr) => (
                     <div
-                      key={`${p.repo}-${p.number}`}
+                      key={`${pr.repo ?? ""}-${pr.number}`}
                       className="detail-pr-card-wrapper"
-                      style={{ opacity: 0.5 }}
                     >
                       <PRCard
-                        pr={{
-                          number: p.number,
-                          title: "Loading…",
-                          state: "open",
-                          url: "",
-                          isDraft: false,
-                          ciStatus: "unknown",
-                          reviewDecision: null,
-                          openComments: 0,
-                          repo: p.repo,
-                        }}
+                        pr={pr}
+                        tag={prTag(
+                          pr.number,
+                          reviewPRNumbers,
+                          watchedPRNumbers,
+                          myPRNumbers,
+                        )}
+                        onClick={() => window.api.shell.openExternal(pr.url)}
                       />
                       <button
                         className="detail-pr-remove-overlay"
-                        style={{ opacity: 1 }}
-                        onClick={() => handleRemovePR(p.repo, p.number)}
+                        onClick={() => handleRemovePR(pr.repo ?? "", pr.number)}
                         title="Unlink PR"
                       >
                         ×
                       </button>
                     </div>
                   ))}
-              </div>
-            ) : (
-              <p className="detail-empty-text">No PRs linked yet.</p>
-            )}
-          </div>
+                  {workspace.prs
+                    .filter(
+                      (p) =>
+                        !linkedPRs.find(
+                          (k) => k.repo === p.repo && k.number === p.number,
+                        ),
+                    )
+                    .map((p) => (
+                      <div
+                        key={`${p.repo}-${p.number}`}
+                        className="detail-pr-card-wrapper"
+                        style={{ opacity: 0.5 }}
+                      >
+                        <PRCard
+                          pr={{
+                            number: p.number,
+                            title: "Loading…",
+                            state: "open",
+                            url: "",
+                            isDraft: false,
+                            ciStatus: "unknown",
+                            reviewDecision: null,
+                            openComments: 0,
+                            repo: p.repo,
+                          }}
+                        />
+                        <button
+                          className="detail-pr-remove-overlay"
+                          style={{ opacity: 1 }}
+                          onClick={() => handleRemovePR(p.repo, p.number)}
+                          title="Unlink PR"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <p className="detail-empty-text">No PRs linked yet.</p>
+              )}
+            </div>
+          )}
 
-          {/* Links — 3-column grid: docs / tickets / other */}
-          <div className="detail-section">
-            <div className="section-header">
-              <span className="detail-section-title">Links</span>
-              <div className="section-header-right flex items-center gap-2">
-                {linkItems.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={handleRefreshLinks}
-                    title="Refresh link metadata"
-                  >
-                    ↻
-                  </button>
-                )}
+          {/* ── Todos ── */}
+          {activeSection === "todos" && (
+            <div>
+              <div
+                className="detail-section-title"
+                style={{ marginBottom: 12 }}
+              >
+                Todos
+              </div>
+              <div className="todo-input-row">
                 <input
-                  className="form-input form-input-sm"
-                  value={linkInput}
-                  onChange={(e) => setLinkInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleAddLink()}
-                  placeholder="Paste a URL…"
+                  className="todo-input"
+                  value={todoInput}
+                  onChange={(e) => setTodoInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddTodo()}
+                  placeholder="Add a todo and press Enter…"
+                />
+              </div>
+              <div className="todo-list">
+                {todos
+                  .filter((t) => !t.done)
+                  .map((todo) => (
+                    <div key={todo.id} className="todo-item">
+                      <input
+                        type="checkbox"
+                        className="todo-checkbox"
+                        checked={false}
+                        onChange={() => handleToggleTodo(todo.id)}
+                      />
+                      <span className="todo-text">{todo.text}</span>
+                      <button
+                        className="todo-delete"
+                        onClick={() => handleDeleteTodo(todo.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                {todos
+                  .filter((t) => t.done)
+                  .map((todo) => (
+                    <div key={todo.id} className="todo-item done">
+                      <input
+                        type="checkbox"
+                        className="todo-checkbox"
+                        checked={true}
+                        onChange={() => handleToggleTodo(todo.id)}
+                      />
+                      <span className="todo-text">{todo.text}</span>
+                      <button
+                        className="todo-delete"
+                        onClick={() => handleDeleteTodo(todo.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Notes ── */}
+          {activeSection === "notes" && (
+            <div>
+              <div className="section-header">
+                <span className="detail-section-title">Notes</span>
+                <div className="section-header-right">
+                  <input
+                    className="form-input form-input-sm"
+                    value={noteInput}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
+                    placeholder="Add a note…"
+                  />
+                </div>
+              </div>
+              {noteItems.length > 0 ? (
+                <div className="note-list">
+                  {noteItems.map((note) => (
+                    <div key={note.id} className="note-card">
+                      {editingNoteId === note.id ? (
+                        <input
+                          className="form-input note-edit-input"
+                          value={editingNoteText}
+                          onChange={(e) => setEditingNoteText(e.target.value)}
+                          onBlur={() => handleSaveNoteEdit(note.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleSaveNoteEdit(note.id);
+                            if (e.key === "Escape") setEditingNoteId(null);
+                          }}
+                          autoFocus
+                        />
+                      ) : (
+                        <span
+                          className="note-text"
+                          onClick={() => {
+                            setEditingNoteId(note.id);
+                            setEditingNoteText(note.text);
+                          }}
+                        >
+                          {note.text}
+                        </span>
+                      )}
+                      <span className="note-time">
+                        {new Date(note.createdAt).toLocaleDateString()}
+                      </span>
+                      <button
+                        className="note-delete"
+                        onClick={() => handleDeleteNote(note.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="detail-empty-text">No notes yet.</p>
+              )}
+            </div>
+          )}
+
+          {/* ── Link sections (Documents / Tickets / Slack / Other) ── */}
+          {(activeSection === "documents" ||
+            activeSection === "tickets" ||
+            activeSection === "slack" ||
+            activeSection === "other") && (
+            <LinkSection
+              label={
+                activeSection === "documents"
+                  ? "Documents"
+                  : activeSection === "tickets"
+                    ? "Tickets"
+                    : activeSection === "slack"
+                      ? "Slack"
+                      : "Other"
+              }
+              items={
+                activeSection === "documents"
+                  ? docLinks
+                  : activeSection === "tickets"
+                    ? ticketLinks
+                    : activeSection === "slack"
+                      ? slackLinks
+                      : otherLinks
+              }
+              linkInput={linkInput}
+              onLinkInputChange={setLinkInput}
+              onAddLink={handleAddLink}
+              onRefresh={handleRefreshLinks}
+              hydrations={linkHydrations}
+              onDelete={handleDeleteLink}
+            />
+          )}
+
+          {/* ── Settings ── */}
+          {activeSection === "settings" && (
+            <div>
+              <div
+                className="detail-section-title"
+                style={{ marginBottom: 16 }}
+              >
+                Settings
+              </div>
+              <div className="detail-config-grid">
+                <div className="detail-field-group">
+                  <label className="form-label">Status</label>
+                  <select
+                    className="form-select"
+                    value={workspace.status}
+                    onChange={(e) =>
+                      handleFieldUpdate({
+                        status: e.target.value as Workspace["status"],
+                      })
+                    }
+                  >
+                    <option value="active">active</option>
+                    <option value="blocked">blocked</option>
+                    <option value="done">done</option>
+                    <option value="archived">archived</option>
+                  </select>
+                </div>
+                <div className="detail-field-group">
+                  <label className="form-label">Type</label>
+                  <select
+                    className="form-select"
+                    value={workspace.type}
+                    onChange={(e) =>
+                      handleFieldUpdate({
+                        type: e.target.value as Workspace["type"],
+                      })
+                    }
+                  >
+                    <option value="feature">feature</option>
+                    <option value="research">research</option>
+                    <option value="bug">bug</option>
+                  </select>
+                </div>
+              </div>
+              <div className="detail-field-group" style={{ marginTop: 10 }}>
+                <label className="form-label">Directory</label>
+                <DirectoryField
+                  directoryPath={workspace.directoryPath}
+                  branch={workspace.branch}
+                  onChange={(next) => {
+                    const update: Partial<Workspace> = {};
+                    if ("directoryPath" in next)
+                      update.directoryPath = next.directoryPath;
+                    if ("branch" in next) update.branch = next.branch;
+                    if (Object.keys(update).length > 0)
+                      handleFieldUpdate(update);
+                  }}
                 />
               </div>
             </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { category: "docs" as LinkCategory, label: "Docs", icon: "📄" },
-                {
-                  category: "tickets" as LinkCategory,
-                  label: "Tickets",
-                  icon: "🎫",
-                },
-                {
-                  category: "other" as LinkCategory,
-                  label: "Other",
-                  icon: "🔗",
-                },
-              ].map(({ category, label, icon }) => {
-                const items = linkItems.filter(
-                  (l) =>
-                    (l.category ?? (l as any).type ?? "other") === category,
-                );
-                return (
-                  <div key={category} className="flex flex-col gap-1 min-w-0">
-                    <div className="link-category-label">
-                      {icon} {label}
-                    </div>
-                    {items.length > 0 ? (
-                      <div className="link-list">
-                        {items.map((link) => (
-                          <LinkRow
-                            key={link.id}
-                            link={link}
-                            hydration={linkHydrations[link.url]}
-                            onDelete={() => handleDeleteLink(link.id)}
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-fg-muted italic py-1">
-                        None
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
+
+// ── Link section (shared by Documents / Tickets / Slack / Other) ───────────
+
+interface LinkSectionProps {
+  label: string;
+  items: WorkspaceLink[];
+  linkInput: string;
+  onLinkInputChange: (v: string) => void;
+  onAddLink: () => void;
+  onRefresh: () => void;
+  hydrations: Record<string, LinkStatus>;
+  onDelete: (id: string) => void;
+}
+
+function LinkSection({
+  label,
+  items,
+  linkInput,
+  onLinkInputChange,
+  onAddLink,
+  onRefresh,
+  hydrations,
+  onDelete,
+}: LinkSectionProps) {
+  return (
+    <div>
+      <div className="section-header">
+        <span className="detail-section-title">{label}</span>
+        <div className="section-header-right">
+          {items.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={onRefresh}
+              title="Refresh link metadata"
+            >
+              ↻
+            </button>
+          )}
+          <input
+            className="form-input form-input-sm"
+            value={linkInput}
+            onChange={(e) => onLinkInputChange(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && onAddLink()}
+            placeholder="Paste a URL…"
+          />
+        </div>
+      </div>
+      {items.length > 0 ? (
+        <div className="link-list">
+          {items.map((link) => (
+            <LinkRow
+              key={link.id}
+              link={link}
+              hydration={hydrations[link.url]}
+              onDelete={() => onDelete(link.id)}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="detail-empty-text">
+          No {label.toLowerCase()} linked yet.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Link row ───────────────────────────────────────────────────────────────
 
 const STATUS_KIND_CLASSES: Record<LinkStatusKind, string> = {
   open: "bg-bg-input text-fg-muted border-line",
@@ -933,8 +1017,6 @@ function LinkRow({ link, hydration, onDelete }: LinkRowProps) {
         return "Rate limited";
       case "network":
         return "Network error";
-      case "unsupported":
-        return undefined;
       default:
         return undefined;
     }

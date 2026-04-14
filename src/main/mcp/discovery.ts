@@ -73,11 +73,31 @@ function extractServers(
  * Reads Claude Code's settings files and returns a map of connector sources
  * to their configured MCP server entries.
  *
- * Checks global settings (~/.claude/settings.json) only — project-level
- * settings are workspace-specific and not relevant here.
+ * Checks (in order, first match wins per source):
+ *   1. ~/.claude/settings.json — global user settings (mcpServers key)
+ *   2. ~/.mcp.json — user-level MCP config (newer Claude Code format)
+ *
+ * Note: claude.ai cloud-managed MCPs (shown in Claude Code's /mcp list as
+ * "claude.ai *") are NOT local processes and cannot be discovered here —
+ * they run in Anthropic's infrastructure.
  */
 export function discoverMcpServers(): Map<ConnectorSource, McpServerConfig> {
-  const globalPath = join(homedir(), ".claude", "settings.json");
-  const settings = parseSettings(globalPath);
-  return extractServers(settings);
+  const home = homedir();
+  const sources: string[] = [
+    join(home, ".claude", "settings.json"),
+    join(home, ".mcp.json"),
+  ];
+
+  const result = new Map<ConnectorSource, McpServerConfig>();
+
+  for (const filePath of sources) {
+    const parsed = parseSettings(filePath);
+    // settings.json uses { mcpServers: {...} }; .mcp.json uses { mcpServers: {...} }
+    const fromFile = extractServers(parsed);
+    for (const [source, config] of fromFile) {
+      if (!result.has(source)) result.set(source, config);
+    }
+  }
+
+  return result;
 }
