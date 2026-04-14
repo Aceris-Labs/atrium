@@ -157,7 +157,8 @@ export function NotesSection({ notes, onChange }: Props) {
                 onDrop={() => handleDrop(idx)}
                 onDragEnd={handleDragEnd}
                 className={[
-                  "group relative flex gap-2 bg-bg-input border rounded-sm p-3 transition-colors h-[200px]",
+                  "group relative flex gap-2 bg-bg-input border rounded-sm p-3 transition-colors",
+                  editingId === note.id ? "min-h-[200px]" : "h-[200px]",
                   isDragging ? "opacity-40" : "",
                   isOver
                     ? "border-blue"
@@ -181,17 +182,20 @@ export function NotesSection({ notes, onChange }: Props) {
                 )}
 
                 {/* Drag handle */}
-                <div className="flex items-start pt-[2px] shrink-0 opacity-0 group-hover:opacity-40 cursor-grab text-fg-muted select-none text-base leading-none">
-                  ⠿
-                </div>
+                {editingId !== note.id && (
+                  <div className="flex items-start pt-[2px] shrink-0 opacity-0 group-hover:opacity-40 cursor-grab text-fg-muted select-none text-base leading-none">
+                    ⠿
+                  </div>
+                )}
 
                 {/* Content */}
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                   {editingId === note.id ? (
-                    <div className="flex flex-col gap-2 flex-1 min-h-0">
+                    <div className="flex flex-col gap-2 flex-1">
                       <textarea
                         ref={editRef}
-                        className="flex-1 min-h-0 w-full bg-bg border border-line rounded-sm text-base text-fg resize-none p-2 focus:outline-none focus:border-line-hover"
+                        className="w-full bg-bg border border-line rounded-sm text-base text-fg resize-none p-2 focus:outline-none focus:border-blue"
+                        style={{ minHeight: 100 }}
                         value={editingText}
                         onChange={(e) => setEditingText(e.target.value)}
                         onKeyDown={(e) => {
@@ -203,12 +207,18 @@ export function NotesSection({ notes, onChange }: Props) {
                         }}
                         autoFocus
                       />
-                      <div className="flex gap-2 justify-end shrink-0">
-                        <button className="btn text-sm" onClick={cancelEdit}>
+                      <div className="flex items-center gap-2 justify-end shrink-0">
+                        <span className="text-xs text-fg-muted mr-1">
+                          ⌘↩ to save · esc to cancel
+                        </span>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={cancelEdit}
+                        >
                           Cancel
                         </button>
                         <button
-                          className="btn btn-primary text-sm"
+                          className="btn btn-primary btn-sm"
                           onClick={() => saveEdit(note.id)}
                         >
                           Save

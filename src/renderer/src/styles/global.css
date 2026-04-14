@@ -885,6 +885,38 @@ body,
   padding: 1px 6px;
 }
 
+.card-status-dot-btn {
+  @apply bg-transparent border-none p-0 cursor-pointer flex items-center;
+}
+
+.card-type-badge-btn {
+  @apply bg-transparent border-none p-0 cursor-pointer;
+}
+
+.detail-meta-item-btn {
+  @apply bg-transparent border-none p-0 cursor-pointer flex items-center gap-[6px];
+}
+
+.detail-meta-item-btn:hover code {
+  @apply border-line-hover;
+}
+
+.detail-meta-value-btn {
+  @apply bg-transparent border-none p-0 cursor-pointer;
+}
+
+.detail-meta-value-btn:hover code {
+  @apply border-line-hover;
+}
+
+.detail-meta-edit-input {
+  @apply bg-bg-input border border-blue rounded-sm text-fg text-sm;
+  font-family: "SF Mono", "Fira Code", monospace;
+  padding: 1px 6px;
+  outline: none;
+  min-width: 120px;
+}
+
 /* Detail body: sidebar (left) + main (right) */
 .detail-body {
   @apply grid flex-1 overflow-hidden;
@@ -969,6 +1001,7 @@ body,
 .todo-list {
   @apply flex flex-col;
   gap: 2px;
+  margin-top: 8px;
 }
 
 .todo-item {
@@ -982,8 +1015,41 @@ body,
 }
 
 .todo-checkbox {
-  @apply w-4 h-4 shrink-0 cursor-pointer;
-  accent-color: var(--green);
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  cursor: pointer;
+  position: relative;
+  border-radius: 4px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-input);
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.todo-checkbox:not(:checked):hover {
+  border-color: var(--text-muted);
+}
+
+.todo-checkbox:checked {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.todo-checkbox:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: 1.5px solid var(--bg);
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
 }
 
 .todo-text {

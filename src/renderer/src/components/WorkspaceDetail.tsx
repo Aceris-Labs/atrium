@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { DirectoryField } from "./DirectoryField";
+import { PathInput } from "./PathInput";
 import { PRCard, PRCardSkeleton } from "./PRCard";
 import { LinkCard } from "./LinkCard";
 import { NotesSection } from "./NotesSection";
@@ -12,6 +13,7 @@ import type {
   WorkspaceLink,
   LinkCategory,
   LinkStatus,
+  GitRepoInfo,
 } from "../../../shared/types";
 
 type Section =
@@ -107,6 +109,21 @@ export function WorkspaceDetail({
   >([]);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
 
+  // Header inline-edit state
+  const [showStatusPicker, setShowStatusPicker] = useState(false);
+  const [showTypePicker, setShowTypePicker] = useState(false);
+  const [showBranchPicker, setShowBranchPicker] = useState(false);
+  const [branchRepoInfo, setBranchRepoInfo] = useState<GitRepoInfo>({
+    isRepo: false,
+  });
+  const [branchDraft, setBranchDraft] = useState(workspace.branch ?? "");
+  const [checkingOutBranch, setCheckingOutBranch] = useState(false);
+  const [branchCheckoutError, setBranchCheckoutError] = useState("");
+  const [editingRepo, setEditingRepo] = useState(false);
+  const [repoDraft, setRepoDraft] = useState(workspace.repo ?? "");
+  const [editingDir, setEditingDir] = useState(false);
+  const [dirDraft, setDirDraft] = useState(workspace.directoryPath ?? "");
+
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   // Derived link groups
@@ -188,6 +205,16 @@ export function WorkspaceDetail({
     window.api.agents.sessions().then(setAvailableSessions);
   }, [workspace.id]);
 
+  useEffect(() => {
+    if (!showBranchPicker) return;
+    const path = workspace.directoryPath?.trim();
+    if (!path) {
+      setBranchRepoInfo({ isRepo: false });
+      return;
+    }
+    window.api.git.detectRepo(path).then(setBranchRepoInfo);
+  }, [showBranchPicker, workspace.directoryPath]);
+
   async function handleRefreshLinks() {
     const urls = (workspace.links ?? []).map((l) => l.url);
     setHydrationPending(new Set(urls));
@@ -208,6 +235,46 @@ export function WorkspaceDetail({
       setTitleDraft(workspace.title);
     }
     setEditingTitle(false);
+  }
+
+  async function commitBranchCheckout(next: string) {
+    if (!next || next === workspace.branch) {
+      setShowBranchPicker(false);
+      setBranchCheckoutError("");
+      return;
+    }
+    const path = workspace.directoryPath?.trim();
+    if (path && branchRepoInfo.isRepo) {
+      setCheckingOutBranch(true);
+      setBranchCheckoutError("");
+      const result = await window.api.git.checkoutBranch(path, next);
+      setCheckingOutBranch(false);
+      if (!result.ok) {
+        setBranchCheckoutError(result.error);
+        return;
+      }
+    }
+    onUpdate({ ...workspace, branch: next });
+    setShowBranchPicker(false);
+  }
+
+  function commitRepo() {
+    const trimmed = repoDraft.trim();
+    if (trimmed !== workspace.repo) {
+      onUpdate({ ...workspace, repo: trimmed || undefined });
+    }
+    setEditingRepo(false);
+  }
+
+  async function commitDir() {
+    const trimmed = dirDraft.trim();
+    const update: Partial<Workspace> = { directoryPath: trimmed || undefined };
+    if (trimmed) {
+      const info = await window.api.git.detectRepo(trimmed);
+      if (info.isRepo && info.currentBranch) update.branch = info.currentBranch;
+    }
+    onUpdate({ ...workspace, ...update });
+    setEditingDir(false);
   }
 
   function handleAddTodo() {
@@ -386,10 +453,49 @@ export function WorkspaceDetail({
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className="detail-header">
         <div className="detail-header-main">
-          <div
-            className={`card-status-dot ${workspace.status}`}
-            style={{ width: 10, height: 10 }}
-          />
+          {/* Status dot picker */}
+          <div className="relative">
+            <button
+              className="card-status-dot-btn"
+              onClick={() => setShowStatusPicker(!showStatusPicker)}
+              title="Change status"
+            >
+              <span
+                className={`card-status-dot ${workspace.status}`}
+                style={{ width: 10, height: 10 }}
+              />
+            </button>
+            {showStatusPicker && (
+              <>
+                <div
+                  className="gear-menu-backdrop"
+                  onClick={() => setShowStatusPicker(false)}
+                />
+                <div
+                  className="gear-menu"
+                  style={{ minWidth: 140, left: 0, right: "auto" }}
+                >
+                  {(["active", "blocked", "done", "archived"] as const).map(
+                    (s) => (
+                      <button
+                        key={s}
+                        className={`gear-menu-item${workspace.status === s ? " selected" : ""}`}
+                        onClick={() => {
+                          onUpdate({ ...workspace, status: s });
+                          setShowStatusPicker(false);
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className={`card-status-dot ${s}`} />
+                          {s}
+                        </span>
+                      </button>
+                    ),
+                  )}
+                </div>
+              </>
+            )}
+          </div>
           {editingTitle ? (
             <input
               ref={titleInputRef}
@@ -417,9 +523,43 @@ export function WorkspaceDetail({
               {workspace.title}
             </h1>
           )}
-          <span className={`card-type-badge ${workspace.type}`}>
-            {workspace.type}
-          </span>
+          {/* Type badge picker */}
+          <div className="relative">
+            <button
+              className="card-type-badge-btn"
+              onClick={() => setShowTypePicker(!showTypePicker)}
+              title="Change type"
+            >
+              <span className={`card-type-badge ${workspace.type}`}>
+                {workspace.type}
+              </span>
+            </button>
+            {showTypePicker && (
+              <>
+                <div
+                  className="gear-menu-backdrop"
+                  onClick={() => setShowTypePicker(false)}
+                />
+                <div
+                  className="gear-menu"
+                  style={{ minWidth: 120, left: 0, right: "auto" }}
+                >
+                  {(["feature", "research", "bug"] as const).map((t) => (
+                    <button
+                      key={t}
+                      className={`gear-menu-item${workspace.type === t ? " selected" : ""}`}
+                      onClick={() => {
+                        onUpdate({ ...workspace, type: t });
+                        setShowTypePicker(false);
+                      }}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
 
           {/* Launch controls inline with title */}
           <div className="flex items-center gap-2 ml-4">
@@ -566,26 +706,161 @@ export function WorkspaceDetail({
         </div>
 
         <div className="detail-header-meta">
-          {workspace.branch && (
-            <span className="detail-meta-item">
+          {/* Branch — popover with real branch list or text input fallback */}
+          <div className="relative">
+            <button
+              className="detail-meta-item detail-meta-item-btn"
+              onClick={() => {
+                setBranchDraft(workspace.branch ?? "");
+                setBranchCheckoutError("");
+                setShowBranchPicker(!showBranchPicker);
+              }}
+              title="Change branch"
+            >
               <span className="detail-meta-label">branch</span>
-              <code>{workspace.branch}</code>
-            </span>
-          )}
-          {workspace.repo && (
-            <span className="detail-meta-item">
-              <span className="detail-meta-label">repo</span>
-              <code>{workspace.repo}</code>
-            </span>
-          )}
-          {workspace.directoryPath && (
-            <span className="detail-meta-item">
-              <span className="detail-meta-label">dir</span>
-              <code>
-                {workspace.directoryPath.replace(/^\/Users\/[^/]+/, "~")}
+              <code className={workspace.branch ? "" : "text-fg-muted"}>
+                {workspace.branch ?? "+ branch"}
               </code>
-            </span>
-          )}
+            </button>
+            {showBranchPicker && (
+              <>
+                <div
+                  className="gear-menu-backdrop"
+                  onClick={() => {
+                    setShowBranchPicker(false);
+                    setBranchCheckoutError("");
+                  }}
+                />
+                <div
+                  className="gear-menu"
+                  style={{ minWidth: 200, left: 0, right: "auto" }}
+                >
+                  {branchRepoInfo.isRepo && branchRepoInfo.branches ? (
+                    <>
+                      {branchRepoInfo.branches.map((b) => (
+                        <button
+                          key={b}
+                          className={`gear-menu-item${workspace.branch === b ? " selected" : ""}`}
+                          disabled={checkingOutBranch}
+                          onClick={() => commitBranchCheckout(b)}
+                        >
+                          {b}
+                          {checkingOutBranch && workspace.branch !== b && (
+                            <span
+                              style={{
+                                marginLeft: "auto",
+                                fontSize: 10,
+                                color: "var(--text-muted)",
+                              }}
+                            >
+                              …
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                      {branchCheckoutError && (
+                        <div
+                          className="gear-menu-item"
+                          style={{
+                            color: "var(--red)",
+                            cursor: "default",
+                            fontSize: 11,
+                          }}
+                        >
+                          {branchCheckoutError}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="px-2 py-2">
+                      <input
+                        className="detail-meta-edit-input w-full"
+                        autoFocus
+                        value={branchDraft}
+                        onChange={(e) => setBranchDraft(e.target.value)}
+                        placeholder="branch name"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter")
+                            commitBranchCheckout(branchDraft);
+                          if (e.key === "Escape") setShowBranchPicker(false);
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Repo — inline text input */}
+          <span className="detail-meta-item">
+            <span className="detail-meta-label">repo</span>
+            {editingRepo ? (
+              <input
+                className="detail-meta-edit-input"
+                autoFocus
+                value={repoDraft}
+                onChange={(e) => setRepoDraft(e.target.value)}
+                placeholder="owner/repo"
+                onBlur={commitRepo}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRepo();
+                  if (e.key === "Escape") {
+                    setRepoDraft(workspace.repo ?? "");
+                    setEditingRepo(false);
+                  }
+                }}
+              />
+            ) : (
+              <button
+                className="detail-meta-value-btn"
+                onClick={() => {
+                  setRepoDraft(workspace.repo ?? "");
+                  setEditingRepo(true);
+                }}
+                title="Edit repo"
+              >
+                <code className={workspace.repo ? "" : "text-fg-muted"}>
+                  {workspace.repo ?? "+ repo"}
+                </code>
+              </button>
+            )}
+          </span>
+
+          {/* Directory — PathInput inline */}
+          <span
+            className="detail-meta-item"
+            style={{ flex: editingDir ? 1 : undefined }}
+          >
+            <span className="detail-meta-label">dir</span>
+            {editingDir ? (
+              <PathInput
+                value={dirDraft}
+                onChange={setDirDraft}
+                placeholder="~/personal-projects/myproject"
+                autoFocus
+                onSubmit={commitDir}
+                className="detail-meta-edit-input"
+              />
+            ) : (
+              <button
+                className="detail-meta-value-btn"
+                onClick={() => {
+                  setDirDraft(workspace.directoryPath ?? "");
+                  setEditingDir(true);
+                }}
+                title="Edit directory"
+              >
+                <code
+                  className={workspace.directoryPath ? "" : "text-fg-muted"}
+                >
+                  {workspace.directoryPath
+                    ? workspace.directoryPath.replace(/^\/Users\/[^/]+/, "~")
+                    : "+ directory"}
+                </code>
+              </button>
+            )}
+          </span>
         </div>
       </div>
 
