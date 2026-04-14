@@ -107,7 +107,7 @@ body,
 
 /* Panel */
 .panel {
-  @apply bg-bg-card border border-line rounded-md overflow-hidden;
+  @apply bg-bg-card border border-line rounded-md overflow-hidden shrink-0;
 }
 
 .panel-header {

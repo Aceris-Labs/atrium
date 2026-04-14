@@ -7,6 +7,7 @@ interface AgentLinkResult {
   status: string | null;
   assignee: string | null;
   updatedAt: string | null;
+  errorCode: string | null;
 }
 
 const SCHEMA = JSON.stringify({
@@ -16,33 +17,52 @@ const SCHEMA = JSON.stringify({
     status: { type: ["string", "null"] },
     assignee: { type: ["string", "null"] },
     updatedAt: { type: ["string", "null"] },
+    errorCode: { type: ["string", "null"] },
   },
-  required: ["title", "status", "assignee", "updatedAt"],
+  required: ["title", "status", "assignee", "updatedAt", "errorCode"],
 });
+
+const TOOL_UNAVAILABLE_NOTE =
+  `If the required tool is not available or you lack permission to use it, ` +
+  `set errorCode to "not-configured" and title to an empty string. ` +
+  `Otherwise set errorCode to null.`;
 
 const PROMPTS: Partial<Record<ConnectorSource, (url: string) => string>> = {
   linear: (url) =>
     `Use the Linear MCP tool to fetch the issue at ${url}. ` +
     `Return the issue title, its current status name, the assignee's name (or null), ` +
-    `and the updatedAt ISO timestamp (or null).`,
+    `and the updatedAt ISO timestamp (or null). ${TOOL_UNAVAILABLE_NOTE}`,
 
   notion: (url) =>
     `Use the Notion MCP tool to fetch the page at ${url}. ` +
-    `Return the page title. Set status, assignee, and updatedAt to null.`,
+    `Return the page title. Set status, assignee, and updatedAt to null. ${TOOL_UNAVAILABLE_NOTE}`,
 
   jira: (url) =>
     `Use the Jira MCP tool to fetch the issue at ${url}. ` +
     `Return the issue summary as title, its current status name, the assignee's name (or null), ` +
-    `and the updated timestamp as updatedAt (or null).`,
+    `and the updated timestamp as updatedAt (or null). ${TOOL_UNAVAILABLE_NOTE}`,
 
   confluence: (url) =>
     `Use the Confluence MCP tool to fetch the page at ${url}. ` +
-    `Return the page title. Set status, assignee, and updatedAt to null.`,
+    `Return the page title. Set status, assignee, and updatedAt to null. ${TOOL_UNAVAILABLE_NOTE}`,
 
   slack: (url) =>
     `Use the Slack MCP tool to fetch the message at ${url}. ` +
-    `Return a short summary of the message as title. Set status, assignee, and updatedAt to null.`,
+    `Return a short summary of the message as title. Set status, assignee, and updatedAt to null. ${TOOL_UNAVAILABLE_NOTE}`,
 };
+
+// Patterns in a returned title that signal the agent couldn't access the tool.
+// Used as a fallback in case the model doesn't set errorCode correctly.
+const ERROR_TITLE_PATTERNS = [
+  "unable to retrieve",
+  "permission not granted",
+  "tool permission",
+  "not available",
+  "cannot access",
+  "failed to retrieve",
+  "tool not found",
+  "no tool",
+];
 
 /**
  * Hydrate a URL by spawning the claude CLI and using its cloud MCP servers.
@@ -95,6 +115,20 @@ export function hydrateViaAgent(
         return;
       }
       const data = envelope.structured_output;
+
+      // Agent explicitly flagged that the tool isn't available/permitted.
+      if (data.errorCode === "not-configured") {
+        resolve(err("not-configured"));
+        return;
+      }
+
+      // Fallback: detect error messages that ended up in the title field.
+      const titleLower = data.title.toLowerCase();
+      if (ERROR_TITLE_PATTERNS.some((p) => titleLower.includes(p))) {
+        resolve(err("not-configured"));
+        return;
+      }
+
       resolve({
         title: data.title,
         status: data.status ?? undefined,
