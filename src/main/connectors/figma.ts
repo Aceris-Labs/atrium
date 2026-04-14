@@ -35,6 +35,7 @@ interface FigmaFile {
   name?: string;
   lastModified?: string;
   thumbnailUrl?: string;
+  role?: string;
 }
 
 interface FigmaMe {
@@ -64,8 +65,9 @@ export const figmaConnector: Connector<FigmaConfig> = {
       const file = (await res.json()) as FigmaFile;
       return {
         title: file.name,
-        icon: file.thumbnailUrl,
+        thumbnailUrl: file.thumbnailUrl,
         updatedAt: file.lastModified,
+        subtitle: file.role,
         fetchedAt: nowIso(),
       };
     } catch {

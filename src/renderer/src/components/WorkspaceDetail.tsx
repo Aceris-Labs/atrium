@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { DirectoryField } from "./DirectoryField";
 import { PRCard } from "./PRCard";
+import { LinkCard } from "./LinkCard";
 import type {
   PRStatus,
   Workspace,
@@ -9,7 +10,6 @@ import type {
   WorkspaceLink,
   LinkCategory,
   LinkStatus,
-  LinkStatusKind,
 } from "../../../shared/types";
 
 type Section =
@@ -965,7 +965,7 @@ function LinkSection({
       {items.length > 0 ? (
         <div className="link-list">
           {items.map((link) => (
-            <LinkRow
+            <LinkCard
               key={link.id}
               link={link}
               hydration={hydrations[link.url]}
@@ -978,82 +978,6 @@ function LinkSection({
           No {label.toLowerCase()} linked yet.
         </p>
       )}
-    </div>
-  );
-}
-
-// ── Link row ───────────────────────────────────────────────────────────────
-
-const STATUS_KIND_CLASSES: Record<LinkStatusKind, string> = {
-  open: "bg-bg-input text-fg-muted border-line",
-  "in-progress": "bg-bg-input text-blue border-blue",
-  done: "bg-bg-input text-green border-green",
-  blocked: "bg-bg-input text-red border-red",
-  unknown: "bg-bg-input text-fg-muted border-line",
-};
-
-interface LinkRowProps {
-  link: WorkspaceLink;
-  hydration?: LinkStatus;
-  onDelete: () => void;
-}
-
-function LinkRow({ link, hydration, onDelete }: LinkRowProps) {
-  const title = hydration?.title ?? link.label;
-  const isError = !!hydration?.error;
-  const isAuthError =
-    hydration?.error === "auth" || hydration?.error === "not-configured";
-  const errorTooltip = (() => {
-    switch (hydration?.error) {
-      case "auth":
-        return "Authentication failed — check your API key in Settings";
-      case "not-configured":
-        return "Connector not configured — add one in Settings";
-      case "not-found":
-        return "Not found";
-      case "forbidden":
-        return "Forbidden";
-      case "rate-limited":
-        return "Rate limited";
-      case "network":
-        return "Network error";
-      default:
-        return undefined;
-    }
-  })();
-
-  return (
-    <div
-      className="link-row"
-      onClick={() => window.api.shell.openExternal(link.url)}
-      title={errorTooltip}
-    >
-      <span className="link-source-badge">{link.source}</span>
-      <span className={`link-label ${isError ? "text-fg-muted italic" : ""}`}>
-        {isAuthError && "🔒 "}
-        {title}
-      </span>
-      {hydration?.statusKind && hydration?.status && (
-        <span
-          className={`text-xs px-[6px] py-[1px] rounded-sm border ${
-            STATUS_KIND_CLASSES[hydration.statusKind]
-          }`}
-        >
-          {hydration.status}
-        </span>
-      )}
-      <span className="link-url">
-        {link.url.replace(/^https?:\/\//, "").slice(0, 40)}
-      </span>
-      <button
-        className="link-delete"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
-        }}
-      >
-        ×
-      </button>
     </div>
   );
 }

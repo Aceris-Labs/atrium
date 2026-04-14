@@ -14,6 +14,10 @@ const ISSUE_QUERY = `
       state { name type }
       assignee { name }
       updatedAt
+      priorityLabel
+      labels { nodes { name } }
+      team { key }
+      comments { totalCount }
     }
   }
 `;
@@ -88,17 +92,30 @@ export const linearConnector: Connector<LinearConfig> = {
             state?: { name?: string; type?: string };
             assignee?: { name?: string };
             updatedAt?: string;
+            priorityLabel?: string;
+            labels?: { nodes: Array<{ name: string }> };
+            team?: { key?: string };
+            comments?: { totalCount?: number };
           };
         };
       };
       const issue = json?.data?.issue;
       if (!issue) return err("not-found");
+      const labels = issue.labels?.nodes.map((l) => l.name).filter(Boolean);
       return {
-        title: `${issue.identifier} — ${issue.title}`,
+        identifier: issue.identifier,
+        title: issue.title,
         status: issue.state?.name,
         statusKind: mapState(issue.state?.type),
         assignee: issue.assignee?.name,
         updatedAt: issue.updatedAt,
+        priority:
+          issue.priorityLabel && issue.priorityLabel !== "No priority"
+            ? issue.priorityLabel
+            : undefined,
+        labels: labels?.length ? labels : undefined,
+        subtitle: issue.team?.key,
+        commentCount: issue.comments?.totalCount,
         fetchedAt: nowIso(),
       };
     } catch {

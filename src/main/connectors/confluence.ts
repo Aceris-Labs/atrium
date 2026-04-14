@@ -27,7 +27,12 @@ interface ConfluencePage {
   id: string;
   title?: string;
   status?: string;
-  version?: { createdAt?: string };
+  space?: { name?: string; key?: string };
+  version?: {
+    number?: number;
+    createdAt?: string;
+    by?: { displayName?: string };
+  };
 }
 
 interface ConfluenceUser {
@@ -54,17 +59,23 @@ export const confluenceConnector: Connector<ConfluenceConfig> = {
     try {
       const res = await atlassianFetch(
         config,
-        `/wiki/api/v2/pages/${encodeURIComponent(pageId)}`,
+        `/wiki/rest/api/content/${encodeURIComponent(pageId)}?expand=space,version`,
       );
       const mapped = mapAtlassianError(res.status);
       if (mapped) return err(mapped);
       if (!res.ok) return err("network");
       const page = (await res.json()) as ConfluencePage;
+      const versionLabel = page.version?.number
+        ? `v${page.version.number}`
+        : undefined;
       return {
         title: page.title,
         status: page.status,
         statusKind: mapPageStatus(page.status),
         updatedAt: page.version?.createdAt,
+        subtitle: page.space?.name,
+        authorName: page.version?.by?.displayName,
+        labels: versionLabel ? [versionLabel] : undefined,
         fetchedAt: nowIso(),
       };
     } catch {

@@ -1040,19 +1040,7 @@ body,
 
 /* Link rows */
 .link-list {
-  @apply flex flex-col gap-1;
-}
-
-.link-row {
-  @apply flex items-center gap-2 bg-bg-input border border-line rounded-sm cursor-pointer;
-  padding: 8px 10px;
-  transition:
-    background 0.1s,
-    border-color 0.15s;
-}
-
-.link-row:hover {
-  @apply bg-bg-card-hover border-line-hover;
+  @apply flex flex-col gap-2;
 }
 
 .link-category {
@@ -1066,38 +1054,6 @@ body,
 .link-category-label {
   @apply text-xs font-semibold text-fg-muted uppercase tracking-[0.06em];
   padding: 2px 0;
-}
-
-.link-source-badge {
-  @apply font-semibold text-fg-muted bg-bg border border-line rounded-sm uppercase tracking-[0.04em] shrink-0;
-  font-size: 10px;
-  padding: 1px 5px;
-}
-
-.link-label {
-  @apply text-base font-medium text-fg shrink-0;
-}
-
-.link-url {
-  @apply text-xs text-fg-muted flex-1 whitespace-nowrap overflow-hidden text-ellipsis;
-  font-family: "SF Mono", "Fira Code", monospace;
-}
-
-.link-delete {
-  @apply bg-transparent border-none text-fg-muted cursor-pointer opacity-0;
-  font-size: 15px;
-  padding: 0 2px;
-  line-height: 1;
-  transition:
-    opacity 0.15s,
-    color 0.15s;
-}
-
-.link-row:hover .link-delete {
-  @apply opacity-100;
-}
-.link-delete:hover {
-  @apply text-red;
 }
 
 /* Detail PR grid (reuses PRCard in a grid) */

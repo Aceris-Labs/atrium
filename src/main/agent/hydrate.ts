@@ -8,6 +8,12 @@ interface AgentLinkResult {
   assignee: string | null;
   updatedAt: string | null;
   errorCode: string | null;
+  identifier: string | null;
+  subtitle: string | null;
+  priority: string | null;
+  labels: string[] | null;
+  authorName: string | null;
+  commentCount: number | null;
 }
 
 const SCHEMA = JSON.stringify({
@@ -18,8 +24,26 @@ const SCHEMA = JSON.stringify({
     assignee: { type: ["string", "null"] },
     updatedAt: { type: ["string", "null"] },
     errorCode: { type: ["string", "null"] },
+    identifier: { type: ["string", "null"] },
+    subtitle: { type: ["string", "null"] },
+    priority: { type: ["string", "null"] },
+    labels: { type: ["array", "null"], items: { type: "string" } },
+    authorName: { type: ["string", "null"] },
+    commentCount: { type: ["number", "null"] },
   },
-  required: ["title", "status", "assignee", "updatedAt", "errorCode"],
+  required: [
+    "title",
+    "status",
+    "assignee",
+    "updatedAt",
+    "errorCode",
+    "identifier",
+    "subtitle",
+    "priority",
+    "labels",
+    "authorName",
+    "commentCount",
+  ],
 });
 
 const TOOL_UNAVAILABLE_NOTE =
@@ -30,25 +54,39 @@ const TOOL_UNAVAILABLE_NOTE =
 const PROMPTS: Partial<Record<ConnectorSource, (url: string) => string>> = {
   linear: (url) =>
     `Use the Linear MCP tool to fetch the issue at ${url}. ` +
-    `Return the issue title, its current status name, the assignee's name (or null), ` +
-    `and the updatedAt ISO timestamp (or null). ${TOOL_UNAVAILABLE_NOTE}`,
+    `Return: identifier (e.g. "ENG-123"), title (issue title only, no identifier prefix), ` +
+    `status (state name), assignee name, updatedAt ISO timestamp, ` +
+    `priority label (e.g. "High", "Urgent", or null if no priority), ` +
+    `labels (array of label names, or null), subtitle (team key, e.g. "ENG"), ` +
+    `commentCount (total comment count as number, or null), authorName null. ` +
+    `${TOOL_UNAVAILABLE_NOTE}`,
 
   notion: (url) =>
     `Use the Notion MCP tool to fetch the page at ${url}. ` +
-    `Return the page title. Set status, assignee, and updatedAt to null. ${TOOL_UNAVAILABLE_NOTE}`,
+    `Return: title (page title), authorName (last_edited_by name or null). ` +
+    `Set identifier, status, assignee, priority, labels, subtitle, commentCount to null. ` +
+    `${TOOL_UNAVAILABLE_NOTE}`,
 
   jira: (url) =>
     `Use the Jira MCP tool to fetch the issue at ${url}. ` +
-    `Return the issue summary as title, its current status name, the assignee's name (or null), ` +
-    `and the updated timestamp as updatedAt (or null). ${TOOL_UNAVAILABLE_NOTE}`,
+    `Return: identifier (issue key, e.g. "ENG-123"), title (summary only), ` +
+    `status (status name), assignee displayName, updatedAt timestamp, ` +
+    `priority (priority name, or null), subtitle (first component name, or null), ` +
+    `labels (array of label strings, or null), commentCount null, authorName null. ` +
+    `${TOOL_UNAVAILABLE_NOTE}`,
 
   confluence: (url) =>
     `Use the Confluence MCP tool to fetch the page at ${url}. ` +
-    `Return the page title. Set status, assignee, and updatedAt to null. ${TOOL_UNAVAILABLE_NOTE}`,
+    `Return: title (page title), subtitle (space name, or null), authorName (last editor, or null). ` +
+    `Set identifier, status, assignee, priority, labels, commentCount to null. ` +
+    `${TOOL_UNAVAILABLE_NOTE}`,
 
   slack: (url) =>
     `Use the Slack MCP tool to fetch the message at ${url}. ` +
-    `Return a short summary of the message as title. Set status, assignee, and updatedAt to null. ${TOOL_UNAVAILABLE_NOTE}`,
+    `Return: title (message text, up to 240 chars), subtitle (channel name prefixed with #, or null), ` +
+    `authorName (sender display name, or null), commentCount (reply count, or null). ` +
+    `Set identifier, status, assignee, priority, labels to null. ` +
+    `${TOOL_UNAVAILABLE_NOTE}`,
 };
 
 // Patterns in a returned title that signal the agent couldn't access the tool.
@@ -134,6 +172,12 @@ export function hydrateViaAgent(
         status: data.status ?? undefined,
         assignee: data.assignee ?? undefined,
         updatedAt: data.updatedAt ?? undefined,
+        identifier: data.identifier ?? undefined,
+        subtitle: data.subtitle ?? undefined,
+        priority: data.priority ?? undefined,
+        labels: data.labels?.length ? data.labels : undefined,
+        authorName: data.authorName ?? undefined,
+        commentCount: data.commentCount ?? undefined,
         fetchedAt: nowIso(),
       });
     });

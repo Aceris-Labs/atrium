@@ -44,6 +44,7 @@ interface CodaDoc {
   name?: string;
   updatedAt?: string;
   browserLink?: string;
+  owner?: string;
 }
 
 interface CodaWhoami {
@@ -66,17 +67,23 @@ export const codaConnector: Connector<CodaConfig> = {
 
     try {
       if (pageId) {
-        const res = await codaFetch(
-          config.apiToken,
-          `/docs/${encodeURIComponent(docId)}/pages/${encodeURIComponent(pageId)}`,
-        );
-        const mapped = mapCodaStatus(res.status);
+        const [pageRes, docRes] = await Promise.all([
+          codaFetch(
+            config.apiToken,
+            `/docs/${encodeURIComponent(docId)}/pages/${encodeURIComponent(pageId)}`,
+          ),
+          codaFetch(config.apiToken, `/docs/${encodeURIComponent(docId)}`),
+        ]);
+        const mapped = mapCodaStatus(pageRes.status);
         if (mapped) return err(mapped);
-        if (!res.ok) return err("network");
-        const page = (await res.json()) as CodaPage;
+        if (!pageRes.ok) return err("network");
+        const page = (await pageRes.json()) as CodaPage;
+        const doc = docRes.ok ? ((await docRes.json()) as CodaDoc) : undefined;
         return {
           title: page.name,
           updatedAt: page.updatedAt,
+          subtitle: doc?.name,
+          authorName: doc?.owner,
           fetchedAt: nowIso(),
         };
       }
@@ -92,6 +99,7 @@ export const codaConnector: Connector<CodaConfig> = {
       return {
         title: doc.name,
         updatedAt: doc.updatedAt,
+        authorName: doc.owner,
         fetchedAt: nowIso(),
       };
     } catch {

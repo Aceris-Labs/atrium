@@ -62,8 +62,21 @@ async function slackCall<T>(
 }
 
 interface HistoryResponse {
-  messages?: Array<{ text?: string; user?: string; ts?: string }>;
+  messages?: Array<{
+    text?: string;
+    user?: string;
+    ts?: string;
+    reply_count?: number;
+    reactions?: Array<{ name: string; count: number }>;
+  }>;
 }
+
+interface ConversationsInfoResponse {
+  channel?: { name?: string };
+}
+
+// Channel name cache: lives for the process lifetime. Channel names rarely change.
+const channelNameCache = new Map<string, string>();
 
 interface UserInfoResponse {
   user?: { profile?: { real_name?: string; display_name?: string } };
@@ -76,9 +89,25 @@ interface AuthTestResponse {
   user_id?: string;
 }
 
-function firstLine(text: string, limit = 100): string {
-  const line = text.split("\n")[0] ?? "";
-  return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
+function trimMessage(text: string, limit = 240): string {
+  const trimmed = text.trim();
+  return trimmed.length > limit ? trimmed.slice(0, limit - 1) + "…" : trimmed;
+}
+
+async function fetchChannelName(
+  token: string,
+  channelId: string,
+): Promise<string | undefined> {
+  const cached = channelNameCache.get(channelId);
+  if (cached !== undefined) return cached;
+  const res = await slackCall<ConversationsInfoResponse>(
+    token,
+    "conversations.info",
+    { channel: channelId },
+  );
+  const name = res.ok ? res.data.channel?.name : undefined;
+  if (name) channelNameCache.set(channelId, name);
+  return name;
 }
 
 export const slackConnector: Connector<SlackConfig> = {
@@ -118,29 +147,35 @@ export const slackConnector: Connector<SlackConfig> = {
     const msg = history.data.messages?.[0];
     if (!msg) return err("not-found");
 
+    const [userRes, channelName] = await Promise.all([
+      msg.user
+        ? slackCall<UserInfoResponse>(config.botToken, "users.info", {
+            user: msg.user,
+          })
+        : Promise.resolve(null),
+      fetchChannelName(config.botToken, channel),
+    ]);
+
     let author: string | undefined;
-    if (msg.user) {
-      const userRes = await slackCall<UserInfoResponse>(
-        config.botToken,
-        "users.info",
-        { user: msg.user },
-      );
-      if (userRes.ok) {
-        author =
-          userRes.data.user?.profile?.display_name ||
-          userRes.data.user?.profile?.real_name;
-      }
+    if (userRes && userRes.ok) {
+      author =
+        userRes.data.user?.profile?.display_name ||
+        userRes.data.user?.profile?.real_name;
     }
 
     const body = msg.text ?? "";
     const updatedAt = msg.ts
       ? new Date(parseFloat(msg.ts) * 1000).toISOString()
       : undefined;
+    const reactions = msg.reactions?.length ? msg.reactions : undefined;
 
     return {
-      title: firstLine(body) || "(empty message)",
-      assignee: author,
+      title: trimMessage(body) || "(empty message)",
+      authorName: author,
       updatedAt,
+      subtitle: channelName ? `#${channelName}` : undefined,
+      commentCount: msg.reply_count,
+      reactions,
       fetchedAt: nowIso(),
     };
   },

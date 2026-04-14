@@ -99,6 +99,16 @@ export interface LinkStatus {
   updatedAt?: string;
   error?: LinkStatusError;
   fetchedAt: string;
+  // enriched metadata
+  identifier?: string; // Linear/Jira key (e.g. "ABC-123")
+  subtitle?: string; // Slack channel, Confluence space, Notion parent, Coda doc
+  priority?: string; // "urgent" / "high" / Jira priority name
+  priorityIcon?: string; // Jira priority iconUrl
+  labels?: string[]; // Linear labels, Jira labels
+  thumbnailUrl?: string; // Figma thumbnail, Notion cover
+  authorName?: string; // last editor / Slack user / version.by
+  commentCount?: number; // Linear comments.totalCount, Slack reply_count
+  reactions?: Array<{ name: string; count: number }>; // Slack
 }
 
 // ── Connectors ─────────────────────────────────────────────────────────────

@@ -34,6 +34,10 @@ interface JiraIssueResponse {
     };
     assignee?: { displayName?: string };
     updated?: string;
+    priority?: { name?: string; iconUrl?: string };
+    issuetype?: { name?: string; iconUrl?: string };
+    labels?: string[];
+    components?: Array<{ name?: string }>;
   };
 }
 
@@ -61,21 +65,28 @@ export const jiraConnector: Connector<JiraConfig> = {
     try {
       const res = await atlassianFetch(
         config,
-        `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status,assignee,updated`,
+        `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status,assignee,updated,priority,issuetype,labels,components`,
       );
       const mapped = mapAtlassianError(res.status);
       if (mapped) return err(mapped);
       if (!res.ok) return err("network");
       const issue = (await res.json()) as JiraIssueResponse;
       const summary = issue.fields?.summary ?? key;
+      const labels = issue.fields?.labels?.filter(Boolean);
       return {
-        title: `${issue.key} — ${summary}`,
+        identifier: issue.key,
+        title: summary,
         status: issue.fields?.status?.name,
         statusKind: mapStatusCategory(
           issue.fields?.status?.statusCategory?.key,
         ),
         assignee: issue.fields?.assignee?.displayName,
         updatedAt: issue.fields?.updated,
+        priority: issue.fields?.priority?.name,
+        priorityIcon: issue.fields?.priority?.iconUrl,
+        icon: issue.fields?.issuetype?.iconUrl,
+        labels: labels?.length ? labels : undefined,
+        subtitle: issue.fields?.components?.[0]?.name,
         fetchedAt: nowIso(),
       };
     } catch {
