@@ -215,6 +215,7 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
   const [connecting, setConnecting] = useState(false);
   const [strategies, setStrategies] = useState<StrategyStatus[] | null>(null);
   const [loadingStrategies, setLoadingStrategies] = useState(false);
+  const [activeForm, setActiveForm] = useState<"api-key" | null>(null);
 
   useEffect(() => {
     setValues(initialValues(meta, status));
@@ -270,8 +271,8 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
       if (!r.ok) return;
       await window.api.connectors.set(meta.source, cfg);
       await onChange();
-      // Refresh strategies after saving new credentials
       setStrategies(null);
+      setActiveForm(null);
     } finally {
       setSaving(false);
     }
@@ -281,6 +282,7 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
     await window.api.connectors.remove(meta.source);
     setResult(null);
     setStrategies(null);
+    setActiveForm(null);
     await onChange();
   }
 
@@ -294,6 +296,16 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
       setStrategies(null);
     }
     setConnecting(false);
+  }
+
+  function handleStrategyClick(strategy: ConnectorStrategy) {
+    if (strategy === "oauth") {
+      void handleOAuth();
+    } else if (strategy === "api-key") {
+      setActiveForm((f) => (f === "api-key" ? null : "api-key"));
+      setResult(null);
+    }
+    // mcp and agent connect automatically — no user action
   }
 
   const mcpStrategy = strategies?.find((s) => s.strategy === "mcp");
@@ -338,138 +350,117 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
 
       {expanded && (
         <div className="flex flex-col gap-3 px-3 pb-3 pt-2 border-t border-line">
-          {/* Strategy detection */}
-          {loadingStrategies ? (
+          {loadingStrategies && (
             <p className="text-xs text-fg-muted">
               Detecting available methods…
             </p>
-          ) : strategies ? (
-            <StrategySection
-              strategies={strategies}
-              mcpConfigured={mcpStrategy?.configured ?? false}
-              hasAgent={agentStrategy?.configured ?? false}
-            />
-          ) : null}
-
-          {/* MCP — no config needed, just status */}
-          {mcpStrategy?.available && (
-            <div className="flex flex-col gap-1">
-              <p className="text-xs text-fg-muted">
-                {mcpStrategy.configured
-                  ? `MCP server connected${mcpStrategy.detail ? ` (${mcpStrategy.detail})` : ""}.`
-                  : `MCP server found${mcpStrategy.detail ? ` (${mcpStrategy.detail})` : ""} but not responding.`}
-              </p>
-            </div>
           )}
 
-          {/* OAuth strategy */}
-          {meta.oauth && (
-            <div className="flex flex-col gap-1">
-              {!mcpStrategy?.available && (
+          {strategies && (
+            <>
+              {/* Interactive strategy list */}
+              <div className="flex flex-col gap-[3px]">
+                {strategies.map((s) => (
+                  <StrategyRow
+                    key={s.strategy}
+                    s={s}
+                    meta={meta}
+                    status={status}
+                    connecting={connecting}
+                    formOpen={
+                      activeForm === "api-key" && s.strategy === "api-key"
+                    }
+                    onConnect={() => handleStrategyClick(s.strategy)}
+                    onDisconnect={handleDisconnect}
+                  />
+                ))}
+              </div>
+
+              {/* Inline API key form */}
+              {activeForm === "api-key" && meta.fields.length > 0 && (
+                <div className="flex flex-col gap-2 border-t border-line pt-3 mt-1">
+                  {meta.createUrl && meta.createLabel && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm self-start"
+                      onClick={() =>
+                        window.api.shell.openExternal(meta.createUrl!)
+                      }
+                    >
+                      {meta.createLabel}
+                    </button>
+                  )}
+                  {meta.helpText && (
+                    <p className="text-xs text-fg-muted">{meta.helpText}</p>
+                  )}
+                  {meta.fields.map((field) => (
+                    <div key={field.name} className="flex flex-col gap-1">
+                      <label className="text-xs text-fg-muted">
+                        {field.label}
+                      </label>
+                      <input
+                        type={field.type}
+                        className="form-input"
+                        value={values[field.name]}
+                        onChange={(e) => setField(field.name, e.target.value)}
+                        placeholder={
+                          field.type === "password" && status.configured
+                            ? "Enter a new token to replace"
+                            : field.placeholder
+                        }
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleTest}
+                      disabled={
+                        testing || (!anySecretFilled && !status.configured)
+                      }
+                    >
+                      {testing ? "Testing…" : "Test"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={handleSave}
+                      disabled={saving || !allFilled}
+                    >
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                    {status.configured &&
+                      status.activeStrategy === "api-key" && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={handleDisconnect}
+                        >
+                          Disconnect
+                        </button>
+                      )}
+                  </div>
+                </div>
+              )}
+
+              {/* Footer hints */}
+              {!mcpStrategy?.configured && agentStrategy?.configured && (
                 <p className="text-xs text-fg-muted">
-                  Connect via OAuth — your browser will open to authorize
-                  Atrium.
+                  Agent fallback active — fetched via Claude Code (~3–10s per
+                  link, cached 5 min).
                 </p>
               )}
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={handleOAuth}
-                  disabled={connecting}
-                >
-                  {connecting
-                    ? "Waiting for browser…"
-                    : status.configured && status.activeStrategy === "oauth"
-                      ? "Reconnect"
-                      : "Connect with Linear"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* API key strategy */}
-          {meta.fields.length > 0 && (
-            <div className="flex flex-col gap-2">
-              {meta.createUrl && meta.createLabel && (
-                <div>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() =>
-                      window.api.shell.openExternal(meta.createUrl!)
-                    }
-                  >
-                    {meta.createLabel}
-                  </button>
-                </div>
+              {!mcpStrategy?.configured && !agentStrategy?.configured && (
+                <p className="text-xs text-fg-muted">
+                  Tip: add an MCP server for this service in Claude Code to
+                  connect without API keys.
+                </p>
               )}
-
-              {meta.helpText && (
-                <p className="text-xs text-fg-muted">{meta.helpText}</p>
-              )}
-
-              {meta.fields.map((field) => (
-                <div key={field.name} className="flex flex-col gap-1">
-                  <label className="text-xs text-fg-muted">{field.label}</label>
-                  <input
-                    type={field.type}
-                    className="form-input"
-                    value={values[field.name]}
-                    onChange={(e) => setField(field.name, e.target.value)}
-                    placeholder={
-                      field.type === "password" && status.configured
-                        ? "Enter a new token to replace"
-                        : field.placeholder
-                    }
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                </div>
-              ))}
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={handleTest}
-                  disabled={testing || (!anySecretFilled && !status.configured)}
-                >
-                  {testing ? "Testing…" : "Test"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={handleSave}
-                  disabled={saving || !allFilled}
-                >
-                  {saving ? "Saving…" : "Save"}
-                </button>
-                {status.configured && status.activeStrategy !== "mcp" && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={handleDisconnect}
-                  >
-                    Disconnect
-                  </button>
-                )}
-              </div>
-            </div>
+            </>
           )}
-
-          {/* Disconnect for OAuth/MCP-only connectors */}
-          {meta.fields.length === 0 &&
-            status.configured &&
-            status.activeStrategy !== "mcp" && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm self-start"
-                onClick={handleDisconnect}
-              >
-                Disconnect
-              </button>
-            )}
 
           {result && (
             <div className={`text-xs ${result.ok ? "text-green" : "text-red"}`}>
@@ -484,56 +475,127 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
   );
 }
 
-interface StrategySectionProps {
-  strategies: StrategyStatus[];
-  mcpConfigured: boolean;
-  hasAgent: boolean;
+interface StrategyRowProps {
+  s: StrategyStatus;
+  meta: ConnectorMeta;
+  status: ConnectorStatus;
+  connecting: boolean;
+  formOpen: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
 }
 
-function StrategySection({
-  strategies,
-  mcpConfigured,
-  hasAgent,
-}: StrategySectionProps) {
-  if (strategies.length === 0) return null;
+function StrategyRow({
+  s,
+  meta,
+  status,
+  connecting,
+  formOpen,
+  onConnect,
+  onDisconnect,
+}: StrategyRowProps) {
+  const isOAuthActive =
+    s.strategy === "oauth" &&
+    status.configured &&
+    status.activeStrategy === "oauth";
+  const isApiKeyActive =
+    s.strategy === "api-key" &&
+    status.configured &&
+    status.activeStrategy === "api-key";
+
+  let cta: React.ReactNode = null;
+
+  if (s.strategy === "mcp") {
+    if (s.configured) {
+      cta = <span className="text-xs text-green">Active</span>;
+    } else if (s.available) {
+      cta = <span className="text-xs text-red">Not responding</span>;
+    }
+  } else if (s.strategy === "oauth" && s.available) {
+    if (isOAuthActive) {
+      cta = (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onConnect}
+            disabled={connecting}
+          >
+            {connecting ? "Waiting…" : "Reconnect"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onDisconnect}
+          >
+            Disconnect
+          </button>
+        </div>
+      );
+    } else {
+      const label = `Connect with ${meta.name}`;
+      cta = (
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={onConnect}
+          disabled={connecting}
+        >
+          {connecting ? "Waiting for browser…" : label}
+        </button>
+      );
+    }
+  } else if (s.strategy === "api-key" && s.available) {
+    if (isApiKeyActive) {
+      cta = (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onConnect}
+        >
+          {formOpen ? "Cancel" : "Update token"}
+        </button>
+      );
+    } else {
+      cta = (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onConnect}
+        >
+          {formOpen ? "Cancel" : "Set up →"}
+        </button>
+      );
+    }
+  } else if (s.strategy === "agent") {
+    if (s.configured) {
+      cta = <span className="text-xs text-green">Active</span>;
+    }
+  }
 
   return (
-    <div className="flex flex-col gap-1">
-      <p className="text-xs text-fg-muted font-medium">Connection methods</p>
-      <div className="flex flex-col gap-[2px]">
-        {strategies.map((s) => (
-          <div key={s.strategy} className="flex items-center gap-2">
-            <span
-              className={`text-xs w-[52px] ${s.configured ? "text-green" : s.available ? "text-fg-muted" : "text-fg-muted opacity-40"}`}
-            >
-              {strategyLabel(s.strategy)}
-            </span>
-            <span className="text-xs text-fg-muted">
-              {s.configured ? (
-                <span className="text-green">
-                  ✓{s.detail ? ` ${s.detail}` : ""}
-                </span>
-              ) : s.available ? (
-                (s.detail ?? "available, not configured")
-              ) : (
-                "not available"
-              )}
-            </span>
-          </div>
-        ))}
-      </div>
-      {!mcpConfigured && hasAgent && (
-        <p className="text-xs text-fg-muted mt-1">
-          Agent fallback is active — links will be fetched via Claude Code
-          (~3-10s per link, cached for 5 min).
-        </p>
-      )}
-      {!mcpConfigured && !hasAgent && (
-        <p className="text-xs text-fg-muted mt-1">
-          Tip: add an MCP server for this service in Claude Code to connect
-          without API keys.
-        </p>
-      )}
+    <div className="flex items-center gap-2 py-[3px]">
+      <span
+        className={`text-xs w-[60px] flex-shrink-0 ${
+          s.configured
+            ? "text-green"
+            : s.available
+              ? "text-fg-muted"
+              : "text-fg-muted opacity-40"
+        }`}
+      >
+        {strategyLabel(s.strategy)}
+      </span>
+      <span className="text-xs text-fg-muted flex-1 min-w-0">
+        {s.configured ? (
+          <span className="text-green">✓{s.detail ? ` ${s.detail}` : ""}</span>
+        ) : s.available ? (
+          (s.detail ?? "available")
+        ) : (
+          "not available"
+        )}
+      </span>
+      {cta && <div className="flex-shrink-0">{cta}</div>}
     </div>
   );
 }
