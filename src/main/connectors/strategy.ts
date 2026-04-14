@@ -25,10 +25,17 @@ export const SUPPORTED_STRATEGIES: Record<
   figma: ["api-key"],
 };
 
+// Cache the result for the app lifetime — the claude binary won't move during a session.
+let _claudePath: string | undefined | null = null;
+
 function findClaudePath(): string | undefined {
+  if (_claudePath !== null) return _claudePath;
   const result = spawnSync("which", ["claude"], { encoding: "utf-8" });
-  if (result.status === 0 && result.stdout.trim()) return result.stdout.trim();
-  return undefined;
+  _claudePath =
+    result.status === 0 && result.stdout.trim()
+      ? result.stdout.trim()
+      : undefined;
+  return _claudePath;
 }
 
 function secretKey(source: ConnectorSource): string {

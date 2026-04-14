@@ -69,6 +69,10 @@ function extractServers(
   return result;
 }
 
+let _mcpCache: Map<ConnectorSource, McpServerConfig> | null = null;
+let _mcpCacheAt = 0;
+const MCP_CACHE_TTL = 30_000;
+
 /**
  * Reads Claude Code's settings files and returns a map of connector sources
  * to their configured MCP server entries.
@@ -77,27 +81,29 @@ function extractServers(
  *   1. ~/.claude/settings.json — global user settings (mcpServers key)
  *   2. ~/.mcp.json — user-level MCP config (newer Claude Code format)
  *
+ * Results are cached for 30 seconds to avoid redundant file reads.
+ *
  * Note: claude.ai cloud-managed MCPs (shown in Claude Code's /mcp list as
  * "claude.ai *") are NOT local processes and cannot be discovered here —
  * they run in Anthropic's infrastructure.
  */
 export function discoverMcpServers(): Map<ConnectorSource, McpServerConfig> {
+  if (_mcpCache && Date.now() - _mcpCacheAt < MCP_CACHE_TTL) return _mcpCache;
+
   const home = homedir();
-  const sources: string[] = [
+  const filePaths = [
     join(home, ".claude", "settings.json"),
     join(home, ".mcp.json"),
   ];
 
   const result = new Map<ConnectorSource, McpServerConfig>();
-
-  for (const filePath of sources) {
-    const parsed = parseSettings(filePath);
-    // settings.json uses { mcpServers: {...} }; .mcp.json uses { mcpServers: {...} }
-    const fromFile = extractServers(parsed);
-    for (const [source, config] of fromFile) {
+  for (const filePath of filePaths) {
+    for (const [source, config] of extractServers(parseSettings(filePath))) {
       if (!result.has(source)) result.set(source, config);
     }
   }
 
+  _mcpCache = result;
+  _mcpCacheAt = Date.now();
   return result;
 }

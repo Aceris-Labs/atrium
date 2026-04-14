@@ -1,4 +1,4 @@
-import { spawnSync } from "child_process";
+import { spawn } from "child_process";
 import type { ConnectorSource, LinkStatus } from "../../shared/types";
 import { err, nowIso } from "../connectors/types";
 
@@ -47,48 +47,66 @@ const PROMPTS: Partial<Record<ConnectorSource, (url: string) => string>> = {
 /**
  * Hydrate a URL by spawning the claude CLI and using its cloud MCP servers.
  * Uses --json-schema for structured output so no LLM text parsing is needed.
+ * Async to avoid blocking the Electron main process.
  */
 export function hydrateViaAgent(
   claudePath: string,
   source: ConnectorSource,
   url: string,
-): LinkStatus {
+): Promise<LinkStatus> {
   const buildPrompt = PROMPTS[source];
-  if (!buildPrompt) return err("unsupported");
+  if (!buildPrompt) return Promise.resolve(err("unsupported"));
 
-  const result = spawnSync(
-    claudePath,
-    [
+  return new Promise((resolve) => {
+    const proc = spawn(claudePath, [
       "-p",
       buildPrompt(url),
       "--output-format",
       "json",
       "--json-schema",
       SCHEMA,
-    ],
-    { encoding: "utf-8", timeout: 30_000 },
-  );
+    ]);
 
-  if (result.status !== 0 || !result.stdout) return err("network");
+    let stdout = "";
+    proc.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
 
-  let envelope: {
-    is_error?: boolean;
-    structured_output?: AgentLinkResult;
-  };
-  try {
-    envelope = JSON.parse(result.stdout) as typeof envelope;
-  } catch {
-    return err("network");
-  }
+    const timer = setTimeout(() => {
+      proc.kill();
+      resolve(err("network"));
+    }, 30_000);
 
-  if (envelope.is_error || !envelope.structured_output) return err("network");
+    proc.on("close", (code: number | null) => {
+      clearTimeout(timer);
+      if (code !== 0 || !stdout) {
+        resolve(err("network"));
+        return;
+      }
+      let envelope: { is_error?: boolean; structured_output?: AgentLinkResult };
+      try {
+        envelope = JSON.parse(stdout) as typeof envelope;
+      } catch {
+        resolve(err("network"));
+        return;
+      }
+      if (envelope.is_error || !envelope.structured_output) {
+        resolve(err("network"));
+        return;
+      }
+      const data = envelope.structured_output;
+      resolve({
+        title: data.title,
+        status: data.status ?? undefined,
+        assignee: data.assignee ?? undefined,
+        updatedAt: data.updatedAt ?? undefined,
+        fetchedAt: nowIso(),
+      });
+    });
 
-  const data = envelope.structured_output;
-  return {
-    title: data.title,
-    status: data.status ?? undefined,
-    assignee: data.assignee ?? undefined,
-    updatedAt: data.updatedAt ?? undefined,
-    fetchedAt: nowIso(),
-  };
+    proc.on("error", () => {
+      clearTimeout(timer);
+      resolve(err("network"));
+    });
+  });
 }

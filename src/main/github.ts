@@ -1,12 +1,16 @@
-import { spawnSync, execSync } from 'child_process'
-import { readdirSync, existsSync } from 'fs'
-import { join } from 'path'
-import { homedir } from 'os'
-import { getConfig, getWingRootDir } from './store'
-import type { PRStatus, RepoInfo } from '../shared/types'
+import { execFile, exec } from "child_process";
+import { promisify } from "util";
+import { readdirSync, existsSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+import { getConfig, getWingRootDir } from "./store";
+import type { PRStatus, RepoInfo } from "../shared/types";
 
-function gql(searchQuery: string): PRStatus[] {
-  const { ghPath } = getConfig()
+const execFileAsync = promisify(execFile);
+const execAsync = promisify(exec);
+
+async function gql(searchQuery: string): Promise<PRStatus[]> {
+  const { ghPath } = getConfig();
 
   const query = `
     query {
@@ -35,155 +39,168 @@ function gql(searchQuery: string): PRStatus[] {
         }
       }
     }
-  `
-
-  const result = spawnSync(ghPath, ['api', 'graphql', '-f', `query=${query}`], {
-    encoding: 'utf-8'
-  })
-
-  if (result.status !== 0 || !result.stdout) return []
+  `;
 
   try {
-    const data = JSON.parse(result.stdout)
+    const { stdout } = await execFileAsync(ghPath, [
+      "api",
+      "graphql",
+      "-f",
+      `query=${query}`,
+    ]);
+    const data = JSON.parse(stdout);
     return data.data.search.edges
       .map((e: any) => e.node)
       .filter((n: any) => n?.number != null)
-      .map(mapNode)
+      .map(mapNode);
   } catch {
-    return []
+    return [];
   }
 }
 
-export function listMyPRs(wingId: string): PRStatus[] {
-  return scopedPRQuery(wingId, 'is:pr is:open author:@me')
+export async function listMyPRs(wingId: string): Promise<PRStatus[]> {
+  return scopedPRQuery(wingId, "is:pr is:open author:@me");
 }
 
-export function listReviewRequests(wingId: string): PRStatus[] {
-  return scopedPRQuery(wingId, 'is:pr is:open review-requested:@me')
+export async function listReviewRequests(wingId: string): Promise<PRStatus[]> {
+  return scopedPRQuery(wingId, "is:pr is:open review-requested:@me");
 }
 
-function scopedPRQuery(wingId: string, baseQuery: string): PRStatus[] {
-  const rootDir = getWingRootDir(wingId)
+async function scopedPRQuery(
+  wingId: string,
+  baseQuery: string,
+): Promise<PRStatus[]> {
+  const rootDir = getWingRootDir(wingId);
 
   // No root dir configured → unbounded query across all of GitHub.
-  // This is the "I haven't told you where my work lives" mode.
-  if (!rootDir) return gql(baseQuery)
+  if (!rootDir) return gql(baseQuery);
 
   // Root dir configured but no repos found → deliberately return nothing.
-  // Falling back to an unbounded query here would be surprising: a user who
-  // set a directory to scope their PRs should never see PRs from unrelated
-  // repos just because the scan came up empty.
-  const repos = getReposInDirectory(rootDir)
-  if (repos.length === 0) return []
+  const repos = await getReposInDirectory(rootDir);
+  if (repos.length === 0) return [];
 
   // If all repos share the same owner, use `org:` (cleaner, handles forks).
-  // Otherwise list each repo explicitly.
-  const owners = [...new Set(repos.map((r) => r.repo.split('/')[0]))]
-  const scope = owners.length === 1
-    ? ` org:${owners[0]}`
-    : ' ' + repos.map((r) => `repo:${r.repo}`).join(' ')
-  return gql(baseQuery + scope)
+  const owners = [...new Set(repos.map((r) => r.repo.split("/")[0]))];
+  const scope =
+    owners.length === 1
+      ? ` org:${owners[0]}`
+      : " " + repos.map((r) => `repo:${r.repo}`).join(" ");
+  return gql(baseQuery + scope);
 }
 
-export function getReposInDirectory(dir: string): RepoInfo[] {
-  const expanded = dir.replace(/^~/, homedir())
-  if (!existsSync(expanded)) return []
+export async function getReposInDirectory(dir: string): Promise<RepoInfo[]> {
+  const expanded = dir.replace(/^~/, homedir());
+  if (!existsSync(expanded)) return [];
 
-  // Case 1: the directory itself is a git repo. Use it directly and don't
-  // also scan children — treating a repo as a "container of repos" would
-  // produce spurious matches from submodules, nested checkouts, etc.
-  if (existsSync(join(expanded, '.git'))) {
-    const repo = readRepoRemote(expanded)
-    return repo ? [{ path: expanded, repo }] : []
+  // Case 1: the directory itself is a git repo.
+  if (existsSync(join(expanded, ".git"))) {
+    const repo = await readRepoRemote(expanded);
+    return repo ? [{ path: expanded, repo }] : [];
   }
 
-  // Case 2: the directory is a container — scan its immediate children for
-  // git repos.
-  const repos: RepoInfo[] = []
+  // Case 2: the directory is a container — scan immediate children in parallel.
+  let entries: ReturnType<typeof readdirSync> = [];
   try {
-    const entries = readdirSync(expanded, { withFileTypes: true })
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      const fullPath = join(expanded, entry.name)
-      if (!existsSync(join(fullPath, '.git'))) continue
-      const repo = readRepoRemote(fullPath)
-      if (repo) repos.push({ path: fullPath, repo })
-    }
-  } catch {}
+    entries = readdirSync(expanded, { withFileTypes: true });
+  } catch {
+    return [];
+  }
 
-  return repos
+  const candidates = entries
+    .filter(
+      (e) => e.isDirectory() && existsSync(join(expanded, e.name, ".git")),
+    )
+    .map((e) => join(expanded, e.name));
+
+  const results = await Promise.all(
+    candidates.map(async (fullPath) => {
+      const repo = await readRepoRemote(fullPath);
+      return repo ? ({ path: fullPath, repo } as RepoInfo) : null;
+    }),
+  );
+  return results.filter((r): r is RepoInfo => r !== null);
 }
 
-function readRepoRemote(repoPath: string): string | null {
+async function readRepoRemote(repoPath: string): Promise<string | null> {
   try {
-    const remote = execSync('git remote get-url origin 2>/dev/null', {
-      cwd: repoPath,
-      encoding: 'utf-8'
-    }).trim()
-    return parseGitRemote(remote)
+    const { stdout } = await execFileAsync(
+      "git",
+      ["remote", "get-url", "origin"],
+      { cwd: repoPath },
+    );
+    return parseGitRemote(stdout.trim());
   } catch {
-    return null
+    return null;
   }
 }
 
 function parseGitRemote(url: string): string | null {
-  const match = url.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/)
-  return match ? match[1] : null
+  const match = url.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
+  return match ? match[1] : null;
 }
 
-export function getDefaultRepo(wingId: string): string | null {
-  const rootDir = getWingRootDir(wingId)
-  if (!rootDir) return null
-  const repos = getReposInDirectory(rootDir)
-  return repos.length > 0 ? repos[0].repo : null
+export async function getDefaultRepo(wingId: string): Promise<string | null> {
+  const rootDir = getWingRootDir(wingId);
+  if (!rootDir) return null;
+  const repos = await getReposInDirectory(rootDir);
+  return repos.length > 0 ? repos[0].repo : null;
 }
 
-export function fetchPR(repo: string, number: number): PRStatus | null {
-  const { ghPath } = getConfig()
-  const result = spawnSync(
-    ghPath,
-    ['pr', 'view', String(number), '--repo', repo,
-     '--json', 'number,title,url,isDraft,reviewDecision,statusCheckRollup,state,reviewRequests'],
-    { encoding: 'utf-8' }
-  )
-  if (result.status !== 0 || !result.stdout) return null
+export async function fetchPR(
+  repo: string,
+  number: number,
+): Promise<PRStatus | null> {
+  const { ghPath } = getConfig();
   try {
-    const pr = JSON.parse(result.stdout)
-    // gh pr view returns statusCheckRollup as an array of checks, not a single state
-    const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []
+    const { stdout } = await execFileAsync(ghPath, [
+      "pr",
+      "view",
+      String(number),
+      "--repo",
+      repo,
+      "--json",
+      "number,title,url,isDraft,reviewDecision,statusCheckRollup,state,reviewRequests",
+    ]);
+    const pr = JSON.parse(stdout);
+    const checks = Array.isArray(pr.statusCheckRollup)
+      ? pr.statusCheckRollup
+      : [];
     return {
       number: pr.number,
       title: pr.title,
-      state: pr.state?.toLowerCase() ?? 'open',
+      state: pr.state?.toLowerCase() ?? "open",
       url: pr.url,
       isDraft: pr.isDraft ?? false,
       ciStatus: deriveCIFromChecks(checks),
       reviewDecision: pr.reviewDecision ?? null,
       openComments: 0,
-      repo
-    }
+      repo,
+    };
   } catch {
-    return null
+    return null;
   }
 }
 
-export function listTmuxSessions(): string[] {
+export async function listTmuxSessions(): Promise<string[]> {
   try {
-    const raw = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null', { encoding: 'utf-8' })
-    return raw.trim().split('\n').filter(Boolean)
+    const { stdout } = await execAsync(
+      'tmux list-sessions -F "#{session_name}" 2>/dev/null',
+    );
+    return stdout.trim().split("\n").filter(Boolean);
   } catch {
-    return []
+    return [];
   }
 }
 
 function mapNode(node: any): PRStatus {
-  const ciState = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null
-  const threads = node.reviewThreads?.nodes ?? []
-  const openComments = threads.filter((t: any) => !t.isResolved).length
+  const ciState =
+    node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null;
+  const threads = node.reviewThreads?.nodes ?? [];
+  const openComments = threads.filter((t: any) => !t.isResolved).length;
   return {
     number: node.number,
     title: node.title,
-    state: 'open',
+    state: "open",
     url: node.url,
     isDraft: node.isDraft ?? false,
     ciStatus: mapCIState(ciState),
@@ -192,34 +209,43 @@ function mapNode(node: any): PRStatus {
     mergeState: node.mergeStateStatus ?? undefined,
     autoMerge: !!node.autoMergeRequest,
     author: node.author?.login,
-    repo: node.repository?.nameWithOwner
-  }
+    repo: node.repository?.nameWithOwner,
+  };
 }
 
-function deriveCIFromChecks(checks: any[]): PRStatus['ciStatus'] {
-  if (checks.length === 0) return 'unknown'
-  const hasFailure = checks.some((c) =>
-    c.conclusion === 'FAILURE' || c.conclusion === 'ERROR' ||
-    c.state === 'FAILURE' || c.state === 'ERROR'
-  )
-  if (hasFailure) return 'failure'
-  const hasRunning = checks.some((c) =>
-    c.status === 'IN_PROGRESS' || c.status === 'QUEUED' || c.status === 'PENDING' ||
-    c.state === 'PENDING'
-  )
-  if (hasRunning) return 'pending'
-  const allDone = checks.every((c) =>
-    c.conclusion === 'SUCCESS' || c.conclusion === 'SKIPPED' || c.conclusion === 'NEUTRAL' ||
-    c.state === 'SUCCESS'
-  )
-  if (allDone) return 'success'
-  return 'unknown'
+function deriveCIFromChecks(checks: any[]): PRStatus["ciStatus"] {
+  if (checks.length === 0) return "unknown";
+  const hasFailure = checks.some(
+    (c) =>
+      c.conclusion === "FAILURE" ||
+      c.conclusion === "ERROR" ||
+      c.state === "FAILURE" ||
+      c.state === "ERROR",
+  );
+  if (hasFailure) return "failure";
+  const hasRunning = checks.some(
+    (c) =>
+      c.status === "IN_PROGRESS" ||
+      c.status === "QUEUED" ||
+      c.status === "PENDING" ||
+      c.state === "PENDING",
+  );
+  if (hasRunning) return "pending";
+  const allDone = checks.every(
+    (c) =>
+      c.conclusion === "SUCCESS" ||
+      c.conclusion === "SKIPPED" ||
+      c.conclusion === "NEUTRAL" ||
+      c.state === "SUCCESS",
+  );
+  if (allDone) return "success";
+  return "unknown";
 }
 
-function mapCIState(state: string | null): PRStatus['ciStatus'] {
-  if (!state) return 'unknown'
-  if (state === 'SUCCESS') return 'success'
-  if (state === 'FAILURE' || state === 'ERROR') return 'failure'
-  if (state === 'PENDING' || state === 'EXPECTED') return 'pending'
-  return 'unknown'
+function mapCIState(state: string | null): PRStatus["ciStatus"] {
+  if (!state) return "unknown";
+  if (state === "SUCCESS") return "success";
+  if (state === "FAILURE" || state === "ERROR") return "failure";
+  if (state === "PENDING" || state === "EXPECTED") return "pending";
+  return "unknown";
 }
