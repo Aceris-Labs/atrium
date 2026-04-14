@@ -7,6 +7,7 @@ import { jiraConnector } from "./jira";
 import { linearConnector } from "./linear";
 import { notionConnector } from "./notion";
 import { slackConnector } from "./slack";
+import { discordConnector } from "./discord";
 import {
   detectStrategies,
   resolveActiveStrategy,
@@ -29,6 +30,7 @@ const CONNECTORS: Connector[] = [
   jiraConnector,
   confluenceConnector,
   slackConnector,
+  discordConnector,
   codaConnector,
   figmaConnector,
 ];

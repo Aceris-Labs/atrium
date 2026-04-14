@@ -4,6 +4,7 @@ import {
   createWorkspace,
   updateWorkspace,
   deleteWorkspace,
+  moveWorkspace,
   getConfig,
   setConfig,
   listWatchedPRs,
@@ -41,6 +42,7 @@ import type {
   Wing,
   LaunchAction,
   ConnectorSource,
+  AgentSessionInfo,
 } from "../shared/types";
 
 export function registerIpcHandlers(): void {
@@ -79,6 +81,11 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("workspaces:delete", (_, wingId: string, id: string) =>
     deleteWorkspace(wingId, id),
   );
+  ipcMain.handle(
+    "workspaces:move",
+    (_, fromWingId: string, toWingId: string, id: string) =>
+      moveWorkspace(fromWingId, toWingId, id),
+  );
 
   // ── GitHub ───────────────────────────────────────────────────────────────
   ipcMain.handle("github:myPRs", (_, wingId: string) => listMyPRs(wingId));
@@ -106,7 +113,7 @@ export function registerIpcHandlers(): void {
   // ── Agents ───────────────────────────────────────────────────────────────
   ipcMain.handle(
     "agents:statuses",
-    (_, sessions: Record<string, string | undefined>) =>
+    (_, sessions: Record<string, AgentSessionInfo | undefined>) =>
       getAgentStatuses(sessions),
   );
   ipcMain.handle("agents:sessions", () => listAvailableSessions());

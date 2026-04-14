@@ -21,6 +21,7 @@ export const SUPPORTED_STRATEGIES: Record<
   jira: ["mcp", "api-key", "agent"],
   confluence: ["mcp", "api-key", "agent"],
   slack: ["mcp", "api-key", "agent"],
+  discord: ["api-key"],
   coda: ["api-key"],
   figma: ["api-key"],
 };

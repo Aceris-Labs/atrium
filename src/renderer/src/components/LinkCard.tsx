@@ -39,6 +39,7 @@ interface LinkCardProps {
   link: WorkspaceLink;
   hydration?: LinkStatus;
   onDelete: () => void;
+  isLoading?: boolean;
 }
 
 function SourceBadge({ source }: { source: string }) {
@@ -316,7 +317,70 @@ function SlackCard({
   );
 }
 
-export function LinkCard({ link, hydration, onDelete }: LinkCardProps) {
+// ── Skeleton variants ────────────────────────────────────────────────────────
+
+function StandardSkeleton({ link }: { link: WorkspaceLink }) {
+  return (
+    <>
+      <div className="flex items-center gap-2 min-w-0">
+        <SourceBadge source={link.source} />
+        <span className="shimmer-bar w-16" />
+        <span className="shimmer-bar flex-1" />
+        <span className="shimmer-bar w-14 rounded-sm" />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="shimmer-bar w-12" />
+        <span className="shimmer-bar w-20" />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="shimmer-bar w-4 h-4 rounded-full" />
+        <span className="shimmer-bar w-24" />
+        <span className="shimmer-bar w-10" />
+      </div>
+    </>
+  );
+}
+
+function FigmaSkeleton({ link }: { link: WorkspaceLink }) {
+  return (
+    <div className="flex flex-row gap-3">
+      <span className="shimmer-bar w-12 h-9 rounded-sm shrink-0" />
+      <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <SourceBadge source={link.source} />
+          <span className="shimmer-bar flex-1" />
+        </div>
+        <span className="shimmer-bar w-16" />
+        <span className="shimmer-bar w-20" />
+      </div>
+    </div>
+  );
+}
+
+function SlackSkeleton({ link }: { link: WorkspaceLink }) {
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <SourceBadge source={link.source} />
+        <span className="shimmer-bar w-20" />
+      </div>
+      <span className="shimmer-bar w-full" />
+      <span className="shimmer-bar w-3/4" />
+      <div className="flex items-center gap-1.5">
+        <span className="shimmer-bar w-4 h-4 rounded-full" />
+        <span className="shimmer-bar w-16" />
+        <span className="shimmer-bar w-10" />
+      </div>
+    </>
+  );
+}
+
+export function LinkCard({
+  link,
+  hydration,
+  onDelete,
+  isLoading,
+}: LinkCardProps) {
   const title = hydration?.title ?? link.label;
   const isError = !!hydration?.error;
   const isAuthError =
@@ -336,7 +400,15 @@ export function LinkCard({ link, hydration, onDelete }: LinkCardProps) {
       onClick={() => window.api.shell.openExternal(link.url)}
       title={errorTooltip}
     >
-      {isFigma ? (
+      {isLoading ? (
+        isFigma ? (
+          <FigmaSkeleton link={link} />
+        ) : isSlack ? (
+          <SlackSkeleton link={link} />
+        ) : (
+          <StandardSkeleton link={link} />
+        )
+      ) : isFigma ? (
         <FigmaCard {...innerProps} />
       ) : isSlack ? (
         <SlackCard {...innerProps} />

@@ -702,6 +702,28 @@ body,
   }
 }
 
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-bar {
+  @apply inline-block rounded-sm;
+  background: linear-gradient(
+    90deg,
+    var(--bg-input) 0%,
+    var(--bg-card-hover) 50%,
+    var(--bg-input) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  min-height: 1em;
+}
+
 /* Session picker */
 .session-picker-wrapper {
   @apply relative;
@@ -991,56 +1013,65 @@ body,
   @apply text-red;
 }
 
-/* Note cards */
-.note-list {
-  @apply flex flex-col gap-1;
+.todo-edit-input {
+  @apply flex-1 bg-bg-input border border-blue rounded-sm text-fg text-base;
+  font-family: inherit;
+  padding: 1px 6px;
+  outline: none;
 }
 
-.note-card {
-  @apply flex items-center gap-2 bg-bg-input border border-line rounded-sm;
-  padding: 8px 10px;
-  transition: background 0.1s;
+.todo-item.drag-over {
+  @apply border-t border-blue;
 }
 
-.note-card:hover {
-  @apply bg-bg-card-hover;
+.todo-done-separator {
+  @apply text-xs text-fg-muted uppercase tracking-[0.05em];
+  padding: 10px 8px 4px;
 }
 
-.note-text {
-  @apply flex-1 text-base text-fg cursor-text;
-  line-height: 1.4;
+/* Note markdown prose */
+.prose-note p {
+  margin: 0 0 0.5em;
+}
+.prose-note p:last-child {
+  margin-bottom: 0;
+}
+.prose-note ul,
+.prose-note ol {
+  margin: 0 0 0.5em 1.25em;
+  padding: 0;
+}
+.prose-note li {
+  margin: 0.15em 0;
+}
+.prose-note code {
+  @apply bg-bg rounded-sm text-xs px-1 py-px font-mono;
+}
+.prose-note pre {
+  @apply bg-bg rounded-sm text-xs p-2 overflow-x-auto mb-2;
+}
+.prose-note pre code {
+  background: none;
+  padding: 0;
+}
+.prose-note strong {
+  @apply font-semibold;
+}
+.prose-note a {
+  @apply text-fg-link underline;
+}
+.prose-note h1,
+.prose-note h2,
+.prose-note h3 {
+  @apply font-semibold;
+  margin: 0.4em 0 0.2em;
 }
 
-.note-edit-input {
-  @apply flex-1 text-base;
-  padding: 2px 6px;
-}
-
-.note-time {
-  @apply text-fg-muted shrink-0;
-  font-size: 10px;
-}
-
-.note-delete {
-  @apply bg-transparent border-none text-fg-muted cursor-pointer opacity-0;
-  font-size: 15px;
-  padding: 0 2px;
-  line-height: 1;
-  transition:
-    opacity 0.15s,
-    color 0.15s;
-}
-
-.note-card:hover .note-delete {
-  @apply opacity-100;
-}
-.note-delete:hover {
-  @apply text-red;
-}
-
-/* Link rows */
+/* Link card grid */
 .link-list {
-  @apply flex flex-col gap-2;
+  @apply grid gap-[10px];
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-auto-rows: 1fr;
 }
 
 .link-category {

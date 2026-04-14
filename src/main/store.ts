@@ -1,11 +1,11 @@
 import {
   readFileSync,
-  writeFileSync,
   mkdirSync,
   existsSync,
   readdirSync,
   renameSync,
 } from "fs";
+import { writeFile } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import type {
@@ -44,9 +44,9 @@ function readJson<T>(file: string, fallback: T): T {
   }
 }
 
-function writeJson(file: string, data: unknown): void {
+async function writeJson(file: string, data: unknown): Promise<void> {
   ensureDir(DIR);
-  writeFileSync(file, JSON.stringify(data, null, 2));
+  await writeFile(file, JSON.stringify(data, null, 2));
 }
 
 function slugify(name: string): string {
@@ -112,16 +112,18 @@ function runMigrationIfNeeded(): void {
     launchProfile: undefined, // inherit default
     createdAt: new Date().toISOString(),
   };
-  writeJson(join(dir, "wing.json"), wing);
+  // Migration writes are best-effort fire-and-forget — this code path
+  // runs at most once per installation (old → new wing layout).
+  void writeJson(join(dir, "wing.json"), wing);
 
   if (hasLegacyWorkspaces) {
     const workspaces = readJson<Workspace[]>(LEGACY_WORKSPACES_FILE, []);
-    writeJson(join(dir, "workspaces.json"), workspaces);
+    void writeJson(join(dir, "workspaces.json"), workspaces);
     renameSync(LEGACY_WORKSPACES_FILE, LEGACY_WORKSPACES_FILE + ".legacy");
   }
   if (hasLegacyWatched) {
     const watched = readJson<WatchedPR[]>(LEGACY_WATCHED_FILE, []);
-    writeJson(join(dir, "watched-prs.json"), watched);
+    void writeJson(join(dir, "watched-prs.json"), watched);
     renameSync(LEGACY_WATCHED_FILE, LEGACY_WATCHED_FILE + ".legacy");
   }
 
@@ -132,7 +134,7 @@ function runMigrationIfNeeded(): void {
     wingOrder: [wingId],
     activeWingId: wingId,
   };
-  writeJson(CONFIG_FILE, newConfig);
+  void writeJson(CONFIG_FILE, newConfig);
 }
 
 // ── Global config ──────────────────────────────────────────────────────────
@@ -161,10 +163,12 @@ export function getConfig(): AtriumConfig {
   };
 }
 
-export function setConfig(partial: Partial<AtriumConfig>): AtriumConfig {
+export async function setConfig(
+  partial: Partial<AtriumConfig>,
+): Promise<AtriumConfig> {
   const current = getConfig();
   const updated = { ...current, ...partial };
-  writeJson(CONFIG_FILE, updated);
+  await writeJson(CONFIG_FILE, updated);
   return updated;
 }
 
@@ -187,11 +191,11 @@ export function getWing(id: string): Wing | null {
   return readJson<Wing>(file, null as unknown as Wing);
 }
 
-export function createWing(data: {
+export async function createWing(data: {
   name: string;
   rootDir?: string;
   launchProfile?: LaunchAction[];
-}): Wing {
+}): Promise<Wing> {
   ensureDir(WINGS_DIR);
   const id = newWingId(data.name);
   const dir = wingDir(id);
@@ -204,26 +208,28 @@ export function createWing(data: {
     launchProfile: data.launchProfile,
     createdAt: new Date().toISOString(),
   };
-  writeJson(join(dir, "wing.json"), wing);
-  writeJson(join(dir, "workspaces.json"), []);
-  writeJson(join(dir, "watched-prs.json"), []);
+  await Promise.all([
+    writeJson(join(dir, "wing.json"), wing),
+    writeJson(join(dir, "workspaces.json"), []),
+    writeJson(join(dir, "watched-prs.json"), []),
+  ]);
 
   const config = getConfig();
   const nextOrder = [...config.wingOrder, id];
   const nextActive = config.activeWingId ?? id;
-  setConfig({ wingOrder: nextOrder, activeWingId: nextActive });
+  await setConfig({ wingOrder: nextOrder, activeWingId: nextActive });
 
   return wing;
 }
 
-export function updateWing(updated: Wing): Wing {
+export async function updateWing(updated: Wing): Promise<Wing> {
   const file = join(wingDir(updated.id), "wing.json");
   if (!existsSync(file)) throw new Error(`Wing not found: ${updated.id}`);
-  writeJson(file, updated);
+  await writeJson(file, updated);
   return updated;
 }
 
-export function reorderWings(orderedIds: string[]): void {
+export async function reorderWings(orderedIds: string[]): Promise<void> {
   const config = getConfig();
   // Keep only ids that still have a wing dir; append any that were missed so nothing disappears.
   const existing = new Set(listWingDirs());
@@ -231,11 +237,11 @@ export function reorderWings(orderedIds: string[]): void {
   for (const id of config.wingOrder) {
     if (existing.has(id) && !sanitized.includes(id)) sanitized.push(id);
   }
-  setConfig({ wingOrder: sanitized });
+  await setConfig({ wingOrder: sanitized });
 }
 
-export function setActiveWing(id: string): void {
-  setConfig({ activeWingId: id });
+export async function setActiveWing(id: string): Promise<void> {
+  await setConfig({ activeWingId: id });
 }
 
 export function getEffectiveLaunchProfile(wingId: string): LaunchAction[] {
@@ -323,19 +329,22 @@ export function listWorkspaces(wingId: string): Workspace[] {
       migrated = true;
     }
   }
-  if (migrated) saveWorkspaces(wingId, workspaces);
+  if (migrated) void saveWorkspaces(wingId, workspaces); // best-effort one-time migration write
   return workspaces;
 }
 
-function saveWorkspaces(wingId: string, workspaces: Workspace[]): void {
+async function saveWorkspaces(
+  wingId: string,
+  workspaces: Workspace[],
+): Promise<void> {
   ensureDir(wingDir(wingId));
-  writeJson(workspacesFile(wingId), workspaces);
+  await writeJson(workspacesFile(wingId), workspaces);
 }
 
-export function createWorkspace(
+export async function createWorkspace(
   wingId: string,
   data: Omit<Workspace, "id" | "createdAt" | "updatedAt">,
-): Workspace {
+): Promise<Workspace> {
   const workspaces = listWorkspaces(wingId);
   const now = new Date().toISOString();
   const workspace: Workspace = {
@@ -348,24 +357,48 @@ export function createWorkspace(
     updatedAt: now,
   };
   workspaces.push(workspace);
-  saveWorkspaces(wingId, workspaces);
+  await saveWorkspaces(wingId, workspaces);
   return workspace;
 }
 
-export function updateWorkspace(wingId: string, updated: Workspace): Workspace {
+export async function updateWorkspace(
+  wingId: string,
+  updated: Workspace,
+): Promise<Workspace> {
   const workspaces = listWorkspaces(wingId);
   const idx = workspaces.findIndex((w) => w.id === updated.id);
   if (idx === -1) throw new Error(`Workspace not found: ${updated.id}`);
   workspaces[idx] = { ...updated, updatedAt: new Date().toISOString() };
-  saveWorkspaces(wingId, workspaces);
+  await saveWorkspaces(wingId, workspaces);
   return workspaces[idx];
 }
 
-export function deleteWorkspace(wingId: string, id: string): void {
-  saveWorkspaces(
+export async function deleteWorkspace(
+  wingId: string,
+  id: string,
+): Promise<void> {
+  await saveWorkspaces(
     wingId,
     listWorkspaces(wingId).filter((w) => w.id !== id),
   );
+}
+
+export async function moveWorkspace(
+  fromWingId: string,
+  toWingId: string,
+  id: string,
+): Promise<Workspace> {
+  const from = listWorkspaces(fromWingId);
+  const ws = from.find((w) => w.id === id);
+  if (!ws) throw new Error(`Workspace not found: ${id}`);
+  await saveWorkspaces(
+    fromWingId,
+    from.filter((w) => w.id !== id),
+  );
+  const to = listWorkspaces(toWingId);
+  to.push(ws);
+  await saveWorkspaces(toWingId, to);
+  return ws;
 }
 
 // ── Wing-scoped watched PRs ────────────────────────────────────────────────
@@ -382,18 +415,24 @@ export function listWatchedPRs(wingId: string): WatchedPR[] {
   return readJson<WatchedPR[]>(watchedFile(wingId), []);
 }
 
-export function addWatchedPR(wingId: string, pr: WatchedPR): WatchedPR[] {
+export async function addWatchedPR(
+  wingId: string,
+  pr: WatchedPR,
+): Promise<WatchedPR[]> {
   const list = listWatchedPRs(wingId);
   if (!list.find((p) => p.number === pr.number && p.repo === pr.repo))
     list.push(pr);
   ensureDir(wingDir(wingId));
-  writeJson(watchedFile(wingId), list);
+  await writeJson(watchedFile(wingId), list);
   return list;
 }
 
-export function removeWatchedPR(wingId: string, num: number): WatchedPR[] {
+export async function removeWatchedPR(
+  wingId: string,
+  num: number,
+): Promise<WatchedPR[]> {
   const list = listWatchedPRs(wingId).filter((p) => p.number !== num);
   ensureDir(wingDir(wingId));
-  writeJson(watchedFile(wingId), list);
+  await writeJson(watchedFile(wingId), list);
   return list;
 }

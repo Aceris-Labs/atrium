@@ -65,6 +65,7 @@ export interface WorkspaceLink {
     | "linear"
     | "github"
     | "slack"
+    | "discord"
     | "figma"
     | "jira"
     | "confluence"
@@ -117,6 +118,7 @@ export type ConnectorSource =
   | "jira"
   | "confluence"
   | "slack"
+  | "discord"
   | "coda"
   | "figma"
   | "notion";
@@ -140,6 +142,10 @@ export type JiraConfig = AtlassianConfig;
 export type ConfluenceConfig = AtlassianConfig;
 
 export interface SlackConfig {
+  botToken: string;
+}
+
+export interface DiscordConfig {
   botToken: string;
 }
 
@@ -192,6 +198,12 @@ export interface Wing {
   // undefined → inherit the global defaultLaunchProfile
   launchProfile?: LaunchAction[];
   createdAt: string;
+}
+
+export interface AgentSessionInfo {
+  tmuxSession?: string;
+  directoryPath?: string;
+  claudeSessionId?: string;
 }
 
 export interface AtriumConfig {
@@ -260,6 +272,11 @@ export type WindowApi = {
     ) => Promise<Workspace>;
     update: (wingId: string, w: Workspace) => Promise<Workspace>;
     delete: (wingId: string, id: string) => Promise<void>;
+    move: (
+      fromWingId: string,
+      toWingId: string,
+      id: string,
+    ) => Promise<Workspace>;
   };
   github: {
     myPRs: (wingId: string) => Promise<PRStatus[]>;
@@ -274,7 +291,7 @@ export type WindowApi = {
   };
   agents: {
     statuses: (
-      sessions: Record<string, string | undefined>,
+      sessions: Record<string, AgentSessionInfo | undefined>,
     ) => Promise<
       Record<string, "working" | "needs-input" | "idle" | "no-session">
     >;

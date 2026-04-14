@@ -15,7 +15,7 @@ function resolveDir(dir?: string): string | undefined {
 // GUI-launched Electron apps on macOS have a reduced PATH that typically
 // doesn't include /opt/homebrew/bin. Resolve tmux to an absolute path once
 // so every subsequent spawn works regardless of how the app was started.
-const TMUX_BIN: string = (() => {
+export const TMUX_BIN: string = (() => {
   const candidates = [
     "/opt/homebrew/bin/tmux",
     "/usr/local/bin/tmux",
@@ -316,7 +316,7 @@ function scheduleSessionIdCapture(
     for (const id of current) {
       if (!existingIds.has(id)) {
         clearInterval(timer);
-        updateWorkspace(wingId, { ...workspace, claudeSessionId: id });
+        void updateWorkspace(wingId, { ...workspace, claudeSessionId: id });
         return;
       }
     }

@@ -4,7 +4,7 @@ import { WorkspaceDetail } from "./components/WorkspaceDetail";
 import { AddWorkspaceModal } from "./components/AddWorkspaceModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { SetupWizard } from "./components/SetupWizard";
-import { PRCard } from "./components/PRCard";
+import { PRCard, PRCardSkeleton } from "./components/PRCard";
 import { WingTabs } from "./components/WingTabs";
 import { CreateWingModal } from "./components/CreateWingModal";
 import type {
@@ -12,6 +12,7 @@ import type {
   Workspace,
   Wing,
   WorkspacePR,
+  AgentSessionInfo,
 } from "../../shared/types";
 
 export default function App() {
@@ -73,15 +74,21 @@ export default function App() {
       setReviewPRs(reviews);
       setTmuxSessions(sessions);
 
-      // Fetch agent statuses by tmux session name
+      // Fetch agent statuses from Claude Code session JSONL
       const ws = await window.api.workspaces.list(wingId);
       if (ws.length > 0) {
-        const sessionMap: Record<string, string | undefined> = {};
+        const sessionMap: Record<string, AgentSessionInfo | undefined> = {};
         ws.forEach((w) => {
-          sessionMap[w.id] = w.tmuxSession;
+          sessionMap[w.id] = {
+            tmuxSession: w.tmuxSession,
+            directoryPath: w.directoryPath,
+            claudeSessionId: w.claudeSessionId,
+          };
         });
         const statuses = await window.api.agents.statuses(sessionMap);
         setAgentStatuses(statuses);
+        // Refresh linked PR statuses so merged/closed state stays current mid-session
+        fetchLinkedPRs(ws);
       }
     } finally {
       syncRef.current = false;
@@ -93,9 +100,13 @@ export default function App() {
     if (!wingId) return;
     const ws = await window.api.workspaces.list(wingId);
     if (ws.length > 0) {
-      const sessionMap: Record<string, string | undefined> = {};
+      const sessionMap: Record<string, AgentSessionInfo | undefined> = {};
       ws.forEach((w) => {
-        sessionMap[w.id] = w.tmuxSession;
+        sessionMap[w.id] = {
+          tmuxSession: w.tmuxSession,
+          directoryPath: w.directoryPath,
+          claudeSessionId: w.claudeSessionId,
+        };
       });
       const statuses = await window.api.agents.statuses(sessionMap);
       setAgentStatuses(statuses);
@@ -231,6 +242,9 @@ export default function App() {
   useEffect(() => {
     if (setupDone !== true || !activeWingId) return;
     setLinkedPRStatuses([]);
+    setMyPRs([]);
+    setReviewPRs([]);
+    setWatchedPRStatuses([]);
     loadWorkspaces(activeWingId);
     loadWatched(activeWingId);
     syncAll(activeWingId);
@@ -276,11 +290,29 @@ export default function App() {
     setSelectedId(null);
   }
 
+  async function handleMove(id: string, toWingId: string) {
+    if (!activeWingId) return;
+    await window.api.workspaces.move(activeWingId, toWingId, id);
+    setWorkspaces((prev) => prev.filter((w) => w.id !== id));
+    setSelectedId(null);
+    if (toWingId === activeWingId) {
+      const updated = await window.api.workspaces.list(activeWingId);
+      setWorkspaces(updated);
+    }
+  }
+
   const allPRs = [...myPRs, ...reviewPRs, ...linkedPRStatuses].reduce<
     PRStatus[]
   >((acc, pr) => {
-    if (!acc.find((p) => p.number === pr.number && p.repo === pr.repo))
+    const idx = acc.findIndex(
+      (p) => p.number === pr.number && p.repo === pr.repo,
+    );
+    if (idx === -1) {
       acc.push(pr);
+    } else if (pr.state !== "open" && acc[idx].state === "open") {
+      // Prefer merged/closed state from linkedPRStatuses over stale open entry
+      acc[idx] = pr;
+    }
     return acc;
   }, []);
 
@@ -336,6 +368,7 @@ export default function App() {
         <WorkspaceDetail
           wingId={activeWingId}
           workspace={selectedWorkspace}
+          allWings={wings}
           prStatuses={allPRs}
           reviewPRNumbers={new Set(reviewPRs.map((p) => p.number))}
           watchedPRNumbers={new Set(watchedPRStatuses.map((p) => p.number))}
@@ -344,6 +377,7 @@ export default function App() {
           agentStatus={agentStatuses[selectedWorkspace.id] ?? "no-session"}
           onUpdate={handleUpdate}
           onDelete={handleDelete}
+          onMove={handleMove}
           onBack={() => setSelectedId(null)}
           onRefreshSessions={async () => {
             const sessions = await window.api.github.tmuxSessions();
@@ -605,19 +639,11 @@ export default function App() {
                     </div>
                   ))}
                   {loadingWatched.map((p) => (
-                    <div
+                    <PRCardSkeleton
                       key={`loading-${p.repo}-${p.number}`}
-                      className="pr-card"
-                      style={{ opacity: 0.5 }}
-                    >
-                      <div className="pr-card-header">
-                        <span className="pr-card-number">#{p.number}</span>
-                      </div>
-                      <div className="pr-card-title">Loading…</div>
-                      <div className="pr-card-footer">
-                        <span className="pr-card-repo">{p.repo}</span>
-                      </div>
-                    </div>
+                      number={p.number}
+                      repo={p.repo}
+                    />
                   ))}
                 </div>
               )}

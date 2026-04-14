@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { DirectoryField } from "./DirectoryField";
-import { PRCard } from "./PRCard";
+import { PRCard, PRCardSkeleton } from "./PRCard";
 import { LinkCard } from "./LinkCard";
+import { NotesSection } from "./NotesSection";
 import type {
   PRStatus,
   Workspace,
+  Wing,
   TodoItem,
   NoteItem,
   WorkspaceLink,
@@ -18,13 +20,14 @@ type Section =
   | "todos"
   | "documents"
   | "tickets"
-  | "slack"
+  | "messaging"
   | "other"
   | "settings";
 
 interface Props {
   wingId: string;
   workspace: Workspace;
+  allWings: Wing[];
   prStatuses: PRStatus[];
   reviewPRNumbers: Set<number>;
   watchedPRNumbers: Set<number>;
@@ -33,6 +36,7 @@ interface Props {
   agentStatus: "working" | "needs-input" | "idle" | "no-session";
   onUpdate: (workspace: Workspace) => void;
   onDelete: (id: string) => void;
+  onMove: (id: string, toWingId: string) => void;
   onBack: () => void;
   onRefreshSessions: () => Promise<void>;
 }
@@ -60,6 +64,7 @@ function prTag(
 export function WorkspaceDetail({
   wingId,
   workspace,
+  allWings,
   prStatuses,
   reviewPRNumbers,
   watchedPRNumbers,
@@ -68,6 +73,7 @@ export function WorkspaceDetail({
   agentStatus,
   onUpdate,
   onDelete,
+  onMove,
   onBack,
   onRefreshSessions,
 }: Props) {
@@ -78,10 +84,11 @@ export function WorkspaceDetail({
   const linkItems: WorkspaceLink[] = workspace.links ?? [];
 
   const [todoInput, setTodoInput] = useState("");
-  const [noteInput, setNoteInput] = useState("");
+  const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
+  const [editingTodoText, setEditingTodoText] = useState("");
+  const [draggingTodoId, setDraggingTodoId] = useState<string | null>(null);
+  const [dragOverTodoId, setDragOverTodoId] = useState<string | null>(null);
   const [linkInput, setLinkInput] = useState("");
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-  const [editingNoteText, setEditingNoteText] = useState("");
   const [prInput, setPrInput] = useState("");
   const [prInputError, setPrInputError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -92,6 +99,9 @@ export function WorkspaceDetail({
   const [linkHydrations, setLinkHydrations] = useState<
     Record<string, LinkStatus>
   >({});
+  const [hydrationPending, setHydrationPending] = useState<Set<string>>(
+    new Set(),
+  );
   const [availableSessions, setAvailableSessions] = useState<
     { name: string; status: string }[]
   >([]);
@@ -102,9 +112,12 @@ export function WorkspaceDetail({
   // Derived link groups
   const docLinks = linkItems.filter((l) => l.category === "docs");
   const ticketLinks = linkItems.filter((l) => l.category === "tickets");
-  const slackLinks = linkItems.filter((l) => l.source === "slack");
+  const messagingLinks = linkItems.filter(
+    (l) => l.source === "slack" || l.source === "discord",
+  );
   const otherLinks = linkItems.filter(
-    (l) => l.category === "other" && l.source !== "slack",
+    (l) =>
+      l.category === "other" && l.source !== "slack" && l.source !== "discord",
   );
   const openTodos = todos.filter((t) => !t.done);
 
@@ -121,7 +134,7 @@ export function WorkspaceDetail({
     { id: "notes", label: "Notes", count: noteItems.length },
     { id: "documents", label: "Documents", count: docLinks.length },
     { id: "tickets", label: "Tickets", count: ticketLinks.length },
-    { id: "slack", label: "Slack", count: slackLinks.length },
+    { id: "messaging", label: "Messaging", count: messagingLinks.length },
     { id: "other", label: "Other", count: otherLinks.length },
     { id: "settings", label: "Settings", count: undefined },
   ];
@@ -151,12 +164,17 @@ export function WorkspaceDetail({
     const urls = (workspace.links ?? []).map((l) => l.url);
     if (urls.length === 0) {
       setLinkHydrations({});
+      setHydrationPending(new Set());
       return;
     }
     let cancelled = false;
     async function run() {
+      setHydrationPending(new Set(urls));
       const result = await window.api.links.hydrate(urls);
-      if (!cancelled) setLinkHydrations(result);
+      if (!cancelled) {
+        setLinkHydrations(result);
+        setHydrationPending(new Set());
+      }
     }
     run();
     const interval = setInterval(run, 5 * 60 * 1000);
@@ -172,12 +190,14 @@ export function WorkspaceDetail({
 
   async function handleRefreshLinks() {
     const urls = (workspace.links ?? []).map((l) => l.url);
+    setHydrationPending(new Set(urls));
     const results = await Promise.all(
       urls.map((url) => window.api.links.refresh(url)),
     );
     const next: Record<string, LinkStatus> = {};
     urls.forEach((url, i) => (next[url] = results[i]));
     setLinkHydrations(next);
+    setHydrationPending(new Set());
   }
 
   function commitRename() {
@@ -209,30 +229,26 @@ export function WorkspaceDetail({
     onUpdate({ ...workspace, todos: todos.filter((t) => t.id !== id) });
   }
 
-  function handleAddNote() {
-    const text = noteInput.trim();
-    if (!text) return;
-    const note: NoteItem = {
-      id: Date.now().toString(36),
-      text,
-      createdAt: new Date().toISOString(),
-    };
-    onUpdate({ ...workspace, notes: [note, ...noteItems] });
-    setNoteInput("");
-  }
-
-  function handleDeleteNote(id: string) {
-    onUpdate({ ...workspace, notes: noteItems.filter((n) => n.id !== id) });
-  }
-
-  function handleSaveNoteEdit(id: string) {
-    const text = editingNoteText.trim();
-    if (!text) return;
+  function handleEditTodo(id: string, text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      handleDeleteTodo(id);
+      return;
+    }
     onUpdate({
       ...workspace,
-      notes: noteItems.map((n) => (n.id === id ? { ...n, text } : n)),
+      todos: todos.map((t) => (t.id === id ? { ...t, text: trimmed } : t)),
     });
-    setEditingNoteId(null);
+  }
+
+  function handleReorderTodo(draggedId: string, targetId: string) {
+    const arr = [...todos];
+    const from = arr.findIndex((t) => t.id === draggedId);
+    const to = arr.findIndex((t) => t.id === targetId);
+    if (from === -1 || to === -1 || from === to) return;
+    const [item] = arr.splice(from, 1);
+    arr.splice(to, 0, item);
+    onUpdate({ ...workspace, todos: arr });
   }
 
   function classifyUrl(url: string): {
@@ -247,6 +263,8 @@ export function WorkspaceDetail({
       return { source: "github", category: "other" };
     if (url.includes("slack.com"))
       return { source: "slack", category: "other" };
+    if (url.includes("discord.com"))
+      return { source: "discord", category: "other" };
     if (url.includes("figma.com")) return { source: "figma", category: "docs" };
     if (url.includes("coda.io")) return { source: "coda", category: "docs" };
     if (url.includes("atlassian.net")) {
@@ -662,24 +680,10 @@ export function WorkspaceDetail({
                       <div
                         key={`${p.repo}-${p.number}`}
                         className="detail-pr-card-wrapper"
-                        style={{ opacity: 0.5 }}
                       >
-                        <PRCard
-                          pr={{
-                            number: p.number,
-                            title: "Loading…",
-                            state: "open",
-                            url: "",
-                            isDraft: false,
-                            ciStatus: "unknown",
-                            reviewDecision: null,
-                            openComments: 0,
-                            repo: p.repo,
-                          }}
-                        />
+                        <PRCardSkeleton number={p.number} repo={p.repo} />
                         <button
                           className="detail-pr-remove-overlay"
-                          style={{ opacity: 1 }}
                           onClick={() => handleRemovePR(p.repo, p.number)}
                           title="Unlink PR"
                         >
@@ -716,14 +720,63 @@ export function WorkspaceDetail({
                 {todos
                   .filter((t) => !t.done)
                   .map((todo) => (
-                    <div key={todo.id} className="todo-item">
+                    <div
+                      key={todo.id}
+                      className={`todo-item${dragOverTodoId === todo.id && draggingTodoId !== todo.id ? " drag-over" : ""}`}
+                      draggable={editingTodoId !== todo.id}
+                      onDragStart={() => setDraggingTodoId(todo.id)}
+                      onDragEnd={() => {
+                        setDraggingTodoId(null);
+                        setDragOverTodoId(null);
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragOverTodoId(todo.id);
+                      }}
+                      onDrop={() => {
+                        if (draggingTodoId)
+                          handleReorderTodo(draggingTodoId, todo.id);
+                        setDraggingTodoId(null);
+                        setDragOverTodoId(null);
+                      }}
+                    >
                       <input
                         type="checkbox"
                         className="todo-checkbox"
                         checked={false}
                         onChange={() => handleToggleTodo(todo.id)}
                       />
-                      <span className="todo-text">{todo.text}</span>
+                      {editingTodoId === todo.id ? (
+                        <input
+                          className="todo-edit-input"
+                          autoFocus
+                          value={editingTodoText}
+                          onChange={(e) => setEditingTodoText(e.target.value)}
+                          onBlur={() => {
+                            handleEditTodo(todo.id, editingTodoText);
+                            setEditingTodoId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              handleEditTodo(todo.id, editingTodoText);
+                              setEditingTodoId(null);
+                            }
+                            if (e.key === "Escape") {
+                              setEditingTodoId(null);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <span
+                          className="todo-text"
+                          onClick={() => {
+                            setEditingTodoId(todo.id);
+                            setEditingTodoText(todo.text);
+                          }}
+                        >
+                          {todo.text}
+                        </span>
+                      )}
                       <button
                         className="todo-delete"
                         onClick={() => handleDeleteTodo(todo.id)}
@@ -732,6 +785,9 @@ export function WorkspaceDetail({
                       </button>
                     </div>
                   ))}
+                {todos.some((t) => t.done) && (
+                  <div className="todo-done-separator">Done</div>
+                )}
                 {todos
                   .filter((t) => t.done)
                   .map((todo) => (
@@ -760,65 +816,18 @@ export function WorkspaceDetail({
             <div>
               <div className="section-header">
                 <span className="detail-section-title">Notes</span>
-                <div className="section-header-right">
-                  <input
-                    className="form-input form-input-sm"
-                    value={noteInput}
-                    onChange={(e) => setNoteInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
-                    placeholder="Add a note…"
-                  />
-                </div>
               </div>
-              {noteItems.length > 0 ? (
-                <div className="note-list">
-                  {noteItems.map((note) => (
-                    <div key={note.id} className="note-card">
-                      {editingNoteId === note.id ? (
-                        <input
-                          className="form-input note-edit-input"
-                          value={editingNoteText}
-                          onChange={(e) => setEditingNoteText(e.target.value)}
-                          onBlur={() => handleSaveNoteEdit(note.id)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleSaveNoteEdit(note.id);
-                            if (e.key === "Escape") setEditingNoteId(null);
-                          }}
-                          autoFocus
-                        />
-                      ) : (
-                        <span
-                          className="note-text"
-                          onClick={() => {
-                            setEditingNoteId(note.id);
-                            setEditingNoteText(note.text);
-                          }}
-                        >
-                          {note.text}
-                        </span>
-                      )}
-                      <span className="note-time">
-                        {new Date(note.createdAt).toLocaleDateString()}
-                      </span>
-                      <button
-                        className="note-delete"
-                        onClick={() => handleDeleteNote(note.id)}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="detail-empty-text">No notes yet.</p>
-              )}
+              <NotesSection
+                notes={noteItems}
+                onChange={(notes) => onUpdate({ ...workspace, notes })}
+              />
             </div>
           )}
 
-          {/* ── Link sections (Documents / Tickets / Slack / Other) ── */}
+          {/* ── Link sections (Documents / Tickets / Messaging / Other) ── */}
           {(activeSection === "documents" ||
             activeSection === "tickets" ||
-            activeSection === "slack" ||
+            activeSection === "messaging" ||
             activeSection === "other") && (
             <LinkSection
               label={
@@ -826,8 +835,8 @@ export function WorkspaceDetail({
                   ? "Documents"
                   : activeSection === "tickets"
                     ? "Tickets"
-                    : activeSection === "slack"
-                      ? "Slack"
+                    : activeSection === "messaging"
+                      ? "Messaging"
                       : "Other"
               }
               items={
@@ -835,8 +844,8 @@ export function WorkspaceDetail({
                   ? docLinks
                   : activeSection === "tickets"
                     ? ticketLinks
-                    : activeSection === "slack"
-                      ? slackLinks
+                    : activeSection === "messaging"
+                      ? messagingLinks
                       : otherLinks
               }
               linkInput={linkInput}
@@ -844,6 +853,7 @@ export function WorkspaceDetail({
               onAddLink={handleAddLink}
               onRefresh={handleRefreshLinks}
               hydrations={linkHydrations}
+              hydrationPending={hydrationPending}
               onDelete={handleDeleteLink}
             />
           )}
@@ -907,6 +917,27 @@ export function WorkspaceDetail({
                   }}
                 />
               </div>
+              {allWings.length > 1 && (
+                <div className="detail-field-group" style={{ marginTop: 10 }}>
+                  <label className="form-label">Move to wing</label>
+                  <select
+                    className="form-select"
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) onMove(workspace.id, e.target.value);
+                    }}
+                  >
+                    <option value="">— select wing —</option>
+                    {allWings
+                      .filter((w) => w.id !== wingId)
+                      .map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -915,7 +946,7 @@ export function WorkspaceDetail({
   );
 }
 
-// ── Link section (shared by Documents / Tickets / Slack / Other) ───────────
+// ── Link section (shared by Documents / Tickets / Messaging / Other) ───────────
 
 interface LinkSectionProps {
   label: string;
@@ -925,6 +956,7 @@ interface LinkSectionProps {
   onAddLink: () => void;
   onRefresh: () => void;
   hydrations: Record<string, LinkStatus>;
+  hydrationPending: Set<string>;
   onDelete: (id: string) => void;
 }
 
@@ -936,6 +968,7 @@ function LinkSection({
   onAddLink,
   onRefresh,
   hydrations,
+  hydrationPending,
   onDelete,
 }: LinkSectionProps) {
   return (
@@ -969,6 +1002,9 @@ function LinkSection({
               key={link.id}
               link={link}
               hydration={hydrations[link.url]}
+              isLoading={
+                hydrationPending.has(link.url) && !hydrations[link.url]
+              }
               onDelete={() => onDelete(link.id)}
             />
           ))}

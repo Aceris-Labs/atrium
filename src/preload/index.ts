@@ -5,6 +5,7 @@ import type {
   WindowApi,
   LaunchAction,
   ConnectorSource,
+  AgentSessionInfo,
 } from "../shared/types";
 
 const api: WindowApi = {
@@ -27,6 +28,8 @@ const api: WindowApi = {
     update: (wingId, workspace) =>
       ipcRenderer.invoke("workspaces:update", wingId, workspace),
     delete: (wingId, id) => ipcRenderer.invoke("workspaces:delete", wingId, id),
+    move: (fromWingId, toWingId, id) =>
+      ipcRenderer.invoke("workspaces:move", fromWingId, toWingId, id),
   },
   github: {
     myPRs: (wingId: string) => ipcRenderer.invoke("github:myPRs", wingId),
@@ -48,7 +51,7 @@ const api: WindowApi = {
     openExternal: (url: string) => shell.openExternal(url),
   },
   agents: {
-    statuses: (sessions: Record<string, string | undefined>) =>
+    statuses: (sessions: Record<string, AgentSessionInfo | undefined>) =>
       ipcRenderer.invoke("agents:statuses", sessions),
     sessions: () => ipcRenderer.invoke("agents:sessions"),
   },
