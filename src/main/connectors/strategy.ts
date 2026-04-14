@@ -1,7 +1,9 @@
+import { spawnSync } from "child_process";
 import { getSecret } from "../secrets";
 import { discoverMcpServers } from "../mcp/discovery";
 import { getMcpClient } from "../mcp/client";
 import { hydrateMcp } from "../mcp/hydrate";
+import { hydrateViaAgent } from "../agent/hydrate";
 import type {
   ConnectorSource,
   ConnectorStrategy,
@@ -14,14 +16,20 @@ export const SUPPORTED_STRATEGIES: Record<
   ConnectorSource,
   ConnectorStrategy[]
 > = {
-  linear: ["mcp", "api-key", "oauth"],
-  notion: ["mcp", "api-key"],
-  jira: ["mcp", "api-key"],
-  confluence: ["mcp", "api-key"],
-  slack: ["mcp", "api-key"],
+  linear: ["mcp", "api-key", "oauth", "agent"],
+  notion: ["mcp", "api-key", "agent"],
+  jira: ["mcp", "api-key", "agent"],
+  confluence: ["mcp", "api-key", "agent"],
+  slack: ["mcp", "api-key", "agent"],
   coda: ["api-key"],
   figma: ["api-key"],
 };
+
+function findClaudePath(): string | undefined {
+  const result = spawnSync("which", ["claude"], { encoding: "utf-8" });
+  if (result.status === 0 && result.stdout.trim()) return result.stdout.trim();
+  return undefined;
+}
 
 function secretKey(source: ConnectorSource): string {
   return `connector:${source}`;
@@ -99,6 +107,17 @@ export async function detectStrategies(
       });
       continue;
     }
+
+    if (strategy === "agent") {
+      const claudePath = findClaudePath();
+      results.push({
+        strategy: "agent",
+        available: claudePath !== undefined,
+        configured: claudePath !== undefined,
+        detail: claudePath ? "via Claude Code" : undefined,
+      });
+      continue;
+    }
   }
 
   return results;
@@ -121,27 +140,38 @@ export function resolveActiveStrategy(
   if (supported.includes("mcp") && mcpServers.has(source)) return "mcp";
 
   const stored = getSecret(secretKey(source));
-  if (!stored) return null;
-  if (supported.includes("oauth") && isOAuthConfig(stored)) return "oauth";
-  if (supported.includes("api-key")) return "api-key";
+  if (stored) {
+    if (supported.includes("oauth") && isOAuthConfig(stored)) return "oauth";
+    if (supported.includes("api-key")) return "api-key";
+  }
+
+  if (supported.includes("agent") && findClaudePath()) return "agent";
   return null;
 }
 
 /**
- * Attempt to hydrate a URL using the MCP strategy.
- * Returns null if MCP is not the active strategy — signals caller to use the
- * existing direct-API connector instead.
+ * Attempt to hydrate a URL using a non-API strategy (MCP or agent).
+ * Returns null if neither is the active strategy — signals caller to fall
+ * through to the direct-API connector.
  */
-export async function hydrateViaMcp(
+export async function hydrateViaStrategy(
   source: ConnectorSource,
   url: string,
 ): Promise<LinkStatus | null> {
   const servers = discoverMcpServers();
-  if (resolveActiveStrategy(source, servers) !== "mcp") return null;
+  const active = resolveActiveStrategy(source, servers);
 
-  const serverConfig = servers.get(source);
-  if (!serverConfig) return null;
+  if (active === "mcp") {
+    const serverConfig = servers.get(source);
+    if (!serverConfig) return null;
+    return hydrateMcp(source, url, getMcpClient(serverConfig));
+  }
 
-  const client = getMcpClient(serverConfig);
-  return hydrateMcp(source, url, client);
+  if (active === "agent") {
+    const claudePath = findClaudePath();
+    if (!claudePath) return null;
+    return hydrateViaAgent(claudePath, source, url);
+  }
+
+  return null;
 }

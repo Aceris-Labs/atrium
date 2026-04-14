@@ -138,6 +138,8 @@ function strategyLabel(strategy: ConnectorStrategy): string {
       return "API Key";
     case "oauth":
       return "OAuth";
+    case "agent":
+      return "Agent";
   }
 }
 
@@ -295,6 +297,7 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
   }
 
   const mcpStrategy = strategies?.find((s) => s.strategy === "mcp");
+  const agentStrategy = strategies?.find((s) => s.strategy === "agent");
 
   return (
     <div className="border border-line rounded-sm bg-bg-card">
@@ -344,6 +347,7 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
             <StrategySection
               strategies={strategies}
               mcpConfigured={mcpStrategy?.configured ?? false}
+              hasAgent={agentStrategy?.configured ?? false}
             />
           ) : null}
 
@@ -483,9 +487,14 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
 interface StrategySectionProps {
   strategies: StrategyStatus[];
   mcpConfigured: boolean;
+  hasAgent: boolean;
 }
 
-function StrategySection({ strategies, mcpConfigured }: StrategySectionProps) {
+function StrategySection({
+  strategies,
+  mcpConfigured,
+  hasAgent,
+}: StrategySectionProps) {
   if (strategies.length === 0) return null;
 
   return (
@@ -513,7 +522,13 @@ function StrategySection({ strategies, mcpConfigured }: StrategySectionProps) {
           </div>
         ))}
       </div>
-      {!mcpConfigured && (
+      {!mcpConfigured && hasAgent && (
+        <p className="text-xs text-fg-muted mt-1">
+          Agent fallback is active — links will be fetched via Claude Code
+          (~3-10s per link, cached for 5 min).
+        </p>
+      )}
+      {!mcpConfigured && !hasAgent && (
         <p className="text-xs text-fg-muted mt-1">
           Tip: add an MCP server for this service in Claude Code to connect
           without API keys.

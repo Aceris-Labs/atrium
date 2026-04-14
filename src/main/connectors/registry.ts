@@ -10,7 +10,7 @@ import { slackConnector } from "./slack";
 import {
   detectStrategies,
   resolveActiveStrategy,
-  hydrateViaMcp,
+  hydrateViaStrategy,
   SUPPORTED_STRATEGIES,
 } from "./strategy";
 import { err } from "./types";
@@ -106,9 +106,9 @@ export async function hydrateOne(url: string): Promise<LinkStatus> {
   const connector = resolveConnector(url);
   if (!connector) return err("unsupported");
 
-  // Try MCP strategy first — returns null if not active
-  const mcpResult = await hydrateViaMcp(connector.source, url);
-  if (mcpResult !== null) return mcpResult;
+  // Try MCP/agent strategy first — returns null if neither is active
+  const strategyResult = await hydrateViaStrategy(connector.source, url);
+  if (strategyResult !== null) return strategyResult;
 
   // Fall back to direct API connector
   const config = getSecret(secretKey(connector.source));

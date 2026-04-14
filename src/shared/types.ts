@@ -141,7 +141,7 @@ export interface FigmaConfig {
   personalAccessToken: string;
 }
 
-export type ConnectorStrategy = "mcp" | "api-key" | "oauth";
+export type ConnectorStrategy = "mcp" | "api-key" | "oauth" | "agent";
 
 export interface StrategyStatus {
   strategy: ConnectorStrategy;
