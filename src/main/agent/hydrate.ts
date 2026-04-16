@@ -63,8 +63,12 @@ const PROMPTS: Partial<Record<ConnectorSource, (url: string) => string>> = {
 
   notion: (url) =>
     `Use the Notion MCP tool to fetch the page at ${url}. ` +
-    `Return: title (page title), authorName (last_edited_by name or null). ` +
-    `Set identifier, status, assignee, priority, labels, subtitle, commentCount to null. ` +
+    `Return: title (page title including any emoji prefix), ` +
+    `subtitle (the "Pod" property value if present, otherwise null), ` +
+    `labels (the "Tags" property array if present, otherwise null), ` +
+    `updatedAt (the "Created At" date as an ISO string if present, otherwise null), ` +
+    `authorName null. ` +
+    `Set identifier, status, assignee, priority, commentCount to null. ` +
     `${TOOL_UNAVAILABLE_NOTE}`,
 
   jira: (url) =>
@@ -81,12 +85,25 @@ const PROMPTS: Partial<Record<ConnectorSource, (url: string) => string>> = {
     `Set identifier, status, assignee, priority, labels, commentCount to null. ` +
     `${TOOL_UNAVAILABLE_NOTE}`,
 
-  slack: (url) =>
-    `Use the Slack MCP tool to fetch the message at ${url}. ` +
-    `Return: title (message text, up to 240 chars), subtitle (channel name prefixed with #, or null), ` +
-    `authorName (sender display name, or null), commentCount (reply count, or null). ` +
-    `Set identifier, status, assignee, priority, labels to null. ` +
-    `${TOOL_UNAVAILABLE_NOTE}`,
+  slack: (url) => {
+    // Extract channel_id and message_ts from URL: /archives/{channel_id}/p{ts_no_dot}
+    const m = url.match(/archives\/([A-Z0-9]+)\/p(\d+)/i);
+    const channelId = m?.[1] ?? "";
+    const rawTs = m?.[2] ?? "";
+    const messageTs =
+      rawTs.length > 6 ? `${rawTs.slice(0, -6)}.${rawTs.slice(-6)}` : rawTs;
+    return (
+      `Use the Slack MCP tools to fetch the message at ${url}. ` +
+      `Step 1: call slack_read_thread with channel_id="${channelId}" and message_ts="${messageTs}" to get the message and replies. ` +
+      `Step 2: call slack_read_channel with channel_id="${channelId}" to get the channel name. ` +
+      `Return: title (parent message text up to 240 chars), ` +
+      `subtitle (channel name prefixed with #, from step 2), ` +
+      `authorName (the display name from the "From:" field of the parent message — null if empty or a bot), ` +
+      `commentCount (number of thread replies, or null). ` +
+      `Set identifier, status, assignee, priority, labels to null. ` +
+      `${TOOL_UNAVAILABLE_NOTE}`
+    );
+  },
 };
 
 // Patterns in a returned title that signal the agent couldn't access the tool.
@@ -133,7 +150,7 @@ export function hydrateViaAgent(
     const timer = setTimeout(() => {
       proc.kill();
       resolve(err("network"));
-    }, 30_000);
+    }, 60_000);
 
     proc.on("close", (code: number | null) => {
       clearTimeout(timer);

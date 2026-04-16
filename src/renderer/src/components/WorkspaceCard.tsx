@@ -9,6 +9,8 @@ interface Props {
   onClick: () => void;
   draggingPR: PRStatus | null;
   onDrop: (pr: PRStatus) => void;
+  onWorkspaceDragStart?: () => void;
+  onWorkspaceDragEnd?: () => void;
 }
 
 const CI_LABEL: Record<PRStatus["ciStatus"], string> = {
@@ -38,6 +40,8 @@ export function WorkspaceCard({
   onClick,
   draggingPR,
   onDrop,
+  onWorkspaceDragStart,
+  onWorkspaceDragEnd,
 }: Props) {
   const [isOver, setIsOver] = useState(false);
   const [fetchedPRs, setFetchedPRs] = useState<PRStatus[]>([]);
@@ -57,6 +61,21 @@ export function WorkspaceCard({
   );
 
   useEffect(() => {
+    // Cache any linked PRs currently in prStatuses so they survive a
+    // temporary drop (e.g. transient fetchPR failure during sync).
+    const fromStatuses = prStatuses.filter((pr) =>
+      workspace.prs.some((p) => p.repo === pr.repo && p.number === pr.number),
+    );
+    if (fromStatuses.length > 0) {
+      setFetchedPRs((prev) => {
+        const existing = new Set(prev.map((p) => `${p.repo}-${p.number}`));
+        const toAdd = fromStatuses.filter(
+          (pr) => !existing.has(`${pr.repo}-${pr.number}`),
+        );
+        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+      });
+    }
+
     async function fetchMissing() {
       const missing = workspace.prs.filter(
         (p) =>
@@ -81,16 +100,24 @@ export function WorkspaceCard({
   return (
     <div
       className={`card ${workspace.status}${isOver && isDropTarget ? " drop-target" : ""}${isDropTarget ? " drop-ready" : ""}`}
+      draggable={!!onWorkspaceDragStart}
       onClick={onClick}
+      onDragStart={(e) => {
+        e.stopPropagation();
+        onWorkspaceDragStart?.();
+      }}
+      onDragEnd={onWorkspaceDragEnd}
       onDragOver={(e) => {
         if (isDropTarget) {
           e.preventDefault();
+          e.stopPropagation();
           setIsOver(true);
         }
       }}
       onDragLeave={() => setIsOver(false)}
       onDrop={(e) => {
         e.preventDefault();
+        e.stopPropagation();
         setIsOver(false);
         if (draggingPR && !alreadyLinked) onDrop(draggingPR);
       }}

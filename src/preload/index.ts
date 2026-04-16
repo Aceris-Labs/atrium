@@ -90,8 +90,13 @@ const api: WindowApi = {
       ipcRenderer.invoke("connectors:test", source, config),
     startOAuth: (source: ConnectorSource) =>
       ipcRenderer.invoke("connectors:oauth", source),
+    enableCloudMcp: (source: ConnectorSource) =>
+      ipcRenderer.invoke("connectors:cloud-mcp:enable", source),
+    disableCloudMcp: (source: ConnectorSource) =>
+      ipcRenderer.invoke("connectors:cloud-mcp:disable", source),
   },
   links: {
+    getCached: (urls: string[]) => ipcRenderer.invoke("links:getCached", urls),
     hydrate: (urls: string[]) => ipcRenderer.invoke("links:hydrate", urls),
     refresh: (url: string) => ipcRenderer.invoke("links:refresh", url),
   },

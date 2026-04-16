@@ -161,6 +161,21 @@ export function WorkspaceDetail({
   }, [editingTitle]);
 
   useEffect(() => {
+    // Cache any linked PRs currently in prStatuses so they survive a
+    // temporary drop (e.g. transient fetchPR failure during sync).
+    const fromStatuses = prStatuses.filter((pr) =>
+      workspace.prs.some((p) => p.repo === pr.repo && p.number === pr.number),
+    );
+    if (fromStatuses.length > 0) {
+      setFetchedPRs((prev) => {
+        const existing = new Set(prev.map((p) => `${p.repo}-${p.number}`));
+        const toAdd = fromStatuses.filter(
+          (pr) => !existing.has(`${pr.repo}-${pr.number}`),
+        );
+        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+      });
+    }
+
     async function fetchMissing() {
       const allKnown = [...prStatuses, ...fetchedPRs];
       const missing = workspace.prs.filter(
@@ -177,8 +192,12 @@ export function WorkspaceDetail({
     fetchMissing();
   }, [workspace.id, workspace.prs, prStatuses]);
 
+  // Stable key: only re-run hydration when the actual URL set changes, not on
+  // every workspace save (which creates new array references even if unchanged).
+  const linksKey = (workspace.links ?? []).map((l) => l.url).join("\0");
+
   useEffect(() => {
-    const urls = (workspace.links ?? []).map((l) => l.url);
+    const urls = linksKey ? linksKey.split("\0") : [];
     if (urls.length === 0) {
       setLinkHydrations({});
       setHydrationPending(new Set());
@@ -186,20 +205,33 @@ export function WorkspaceDetail({
     }
     let cancelled = false;
     async function run() {
-      setHydrationPending(new Set(urls));
-      const result = await window.api.links.hydrate(urls);
+      // Phase 1: show stale cached data immediately — no shimmer for known URLs.
+      const stale = await window.api.links.getCached(urls);
       if (!cancelled) {
-        setLinkHydrations(result);
-        setHydrationPending(new Set());
+        setLinkHydrations(stale);
+        // Shimmer only for URLs with no cache entry at all.
+        setHydrationPending(new Set(urls.filter((u) => !stale[u])));
+      }
+
+      // Phase 2: hydrate in background (skips fresh URLs, fetches stale/missing).
+      try {
+        const fresh = await window.api.links.hydrate(urls);
+        if (!cancelled) {
+          setLinkHydrations(fresh);
+          setHydrationPending(new Set());
+        }
+      } catch {
+        if (!cancelled) setHydrationPending(new Set());
       }
     }
-    run();
-    const interval = setInterval(run, 5 * 60 * 1000);
+    void run();
+    const interval = setInterval(() => void run(), 5 * 60 * 1000);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [workspace.id, workspace.links]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.id, linksKey]);
 
   useEffect(() => {
     window.api.agents.sessions().then(setAvailableSessions);

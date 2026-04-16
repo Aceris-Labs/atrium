@@ -134,6 +134,8 @@ function strategyLabel(strategy: ConnectorStrategy): string {
   switch (strategy) {
     case "mcp":
       return "MCP";
+    case "cloud-mcp":
+      return "Claude Code";
     case "api-key":
       return "API Key";
     case "oauth":
@@ -309,7 +311,19 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
   }
 
   const mcpStrategy = strategies?.find((s) => s.strategy === "mcp");
-  const agentStrategy = strategies?.find((s) => s.strategy === "agent");
+  const cloudMcpStrategy = strategies?.find((s) => s.strategy === "cloud-mcp");
+
+  async function handleEnableCloudMcp() {
+    await window.api.connectors.enableCloudMcp(meta.source);
+    await onChange();
+    setStrategies(null);
+  }
+
+  async function handleDisableCloudMcp() {
+    await window.api.connectors.disableCloudMcp(meta.source);
+    await onChange();
+    setStrategies(null);
+  }
 
   return (
     <div className="border border-line rounded-sm bg-bg-card">
@@ -372,6 +386,8 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
                     }
                     onConnect={() => handleStrategyClick(s.strategy)}
                     onDisconnect={handleDisconnect}
+                    onEnableCloudMcp={handleEnableCloudMcp}
+                    onDisableCloudMcp={handleDisableCloudMcp}
                   />
                 ))}
               </div>
@@ -447,16 +463,10 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
               )}
 
               {/* Footer hints */}
-              {!mcpStrategy?.configured && agentStrategy?.configured && (
+              {cloudMcpStrategy?.configured && (
                 <p className="text-xs text-fg-muted">
-                  Agent fallback active — fetched via Claude Code (~3–10s per
-                  link, cached 5 min).
-                </p>
-              )}
-              {!mcpStrategy?.configured && !agentStrategy?.configured && (
-                <p className="text-xs text-fg-muted">
-                  Tip: add an MCP server for this service in Claude Code to
-                  connect without API keys.
+                  Links fetched via Claude Code cloud MCP (~20–30s, cached 5
+                  min).
                 </p>
               )}
             </>
@@ -483,6 +493,8 @@ interface StrategyRowProps {
   formOpen: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
+  onEnableCloudMcp: () => void;
+  onDisableCloudMcp: () => void;
 }
 
 function StrategyRow({
@@ -493,6 +505,8 @@ function StrategyRow({
   formOpen,
   onConnect,
   onDisconnect,
+  onEnableCloudMcp,
+  onDisableCloudMcp,
 }: StrategyRowProps) {
   const isOAuthActive =
     s.strategy === "oauth" &&
@@ -510,6 +524,33 @@ function StrategyRow({
       cta = <span className="text-xs text-green">Active</span>;
     } else if (s.available) {
       cta = <span className="text-xs text-red">Not responding</span>;
+    }
+  } else if (s.strategy === "cloud-mcp") {
+    if (!s.available) {
+      // claude not installed — no CTA
+    } else if (s.configured) {
+      cta = (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-green">Active</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onDisableCloudMcp}
+          >
+            Disable
+          </button>
+        </div>
+      );
+    } else {
+      cta = (
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={onEnableCloudMcp}
+        >
+          Enable
+        </button>
+      );
     }
   } else if (s.strategy === "oauth" && s.available) {
     if (isOAuthActive) {
@@ -566,10 +607,6 @@ function StrategyRow({
           {formOpen ? "Cancel" : "Set up →"}
         </button>
       );
-    }
-  } else if (s.strategy === "agent") {
-    if (s.configured) {
-      cta = <span className="text-xs text-green">Active</span>;
     }
   }
 

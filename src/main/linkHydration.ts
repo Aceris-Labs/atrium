@@ -2,6 +2,16 @@ import { hydrateOne } from "./connectors/registry";
 import { getCached, isFresh, setCached } from "./linkCache";
 import type { LinkStatus } from "../shared/types";
 
+/** Return whatever is in the in-memory cache for each URL, no freshness check. */
+export function getCachedLinks(urls: string[]): Record<string, LinkStatus> {
+  const result: Record<string, LinkStatus> = {};
+  for (const url of urls) {
+    const cached = getCached(url);
+    if (cached) result[url] = cached;
+  }
+  return result;
+}
+
 export async function hydrateLinks(
   urls: string[],
 ): Promise<Record<string, LinkStatus>> {

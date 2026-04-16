@@ -16,6 +16,18 @@ function formatRelative(iso: string): string {
   return `${Math.floor(days / 30)}mo ago`;
 }
 
+/** Derive display kind from raw status string when statusKind isn't set (agent path). */
+function resolveKind(hydration: LinkStatus | undefined): LinkStatusKind {
+  if (!hydration) return "unknown";
+  if (hydration.statusKind) return hydration.statusKind;
+  const s = (hydration.status ?? "").toLowerCase();
+  if (/done|complet|resolv|clos|cancel|merged/.test(s)) return "done";
+  if (/progress|review|active|working/.test(s)) return "in-progress";
+  if (/block/.test(s)) return "blocked";
+  if (/todo|open|triage|backlog|unstarted/.test(s)) return "open";
+  return "unknown";
+}
+
 const STATUS_KIND_CLASSES: Record<LinkStatusKind, string> = {
   open: "bg-bg-input text-fg-muted border-line",
   "in-progress": "bg-bg-input text-blue border-blue",
@@ -64,33 +76,8 @@ function DeleteButton({ onDelete }: { onDelete: () => void }) {
   );
 }
 
-function AuthorFooter({
-  authorName,
-  updatedAt,
-}: {
-  authorName?: string;
-  updatedAt?: string;
-}) {
-  if (!authorName && !updatedAt) return null;
-  return (
-    <div className="flex items-center gap-1.5 text-xs text-fg-muted min-w-0">
-      {authorName && (
-        <>
-          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-bg-input text-[10px] shrink-0">
-            {authorName[0].toUpperCase()}
-          </span>
-          <span className="truncate">{authorName}</span>
-        </>
-      )}
-      {authorName && updatedAt && <span className="shrink-0">·</span>}
-      {updatedAt && (
-        <span className="shrink-0">{formatRelative(updatedAt)}</span>
-      )}
-    </div>
-  );
-}
+// ── Standard card (Linear, Notion, Jira, Confluence, Coda) ──────────────────
 
-/** Standard card: Linear, Jira, Notion, Confluence, Coda */
 function StandardCard({
   link,
   hydration,
@@ -106,26 +93,22 @@ function StandardCard({
   isAuthError: boolean;
   title: string;
 }) {
-  const chips: { key: string; label: string; icon?: string }[] = [];
-  if (hydration?.priorityIcon) {
-    chips.push({
-      key: "priority-icon",
-      label: hydration.priority ?? "priority",
-      icon: hydration.priorityIcon,
-    });
-  } else if (hydration?.priority) {
-    chips.push({ key: "priority", label: hydration.priority });
-  }
-  hydration?.labels
-    ?.slice(0, 3)
-    .forEach((l) => chips.push({ key: `label-${l}`, label: l }));
-  if (hydration?.subtitle) {
-    chips.push({ key: "subtitle", label: hydration.subtitle });
-  }
+  const statusKind = resolveKind(hydration);
+  const showStatus = !isError && !!hydration?.status;
+
+  // Footer left: priority + labels + team/component chips
+  const chips: string[] = [];
+  if (hydration?.priority) chips.push(hydration.priority);
+  hydration?.labels?.slice(0, 2).forEach((l) => chips.push(l));
+  if (hydration?.subtitle) chips.push(hydration.subtitle);
+
+  // Footer right: assignee or last editor + date
+  const person = hydration?.assignee ?? hydration?.authorName;
+  const date = hydration?.updatedAt;
 
   return (
     <>
-      {/* Header */}
+      {/* Row 1: source + identifier — status badge + delete */}
       <div className="flex items-center gap-2 min-w-0">
         <SourceBadge source={link.source} />
         {hydration?.identifier && (
@@ -138,54 +121,60 @@ function StandardCard({
             {hydration.icon}
           </span>
         )}
-        <span
-          className={`flex-1 text-sm font-medium truncate min-w-0 ${
-            isError ? "text-fg-muted italic" : "text-fg"
-          }`}
-        >
-          {isAuthError && "🔒 "}
-          {title}
-        </span>
-        {hydration?.statusKind && hydration?.status && (
+        <div className="flex-1" />
+        {showStatus && (
           <span
-            className={`text-xs px-[6px] py-[1px] rounded-sm border shrink-0 ${
-              STATUS_KIND_CLASSES[hydration.statusKind]
-            }`}
+            className={`text-xs px-[6px] py-[1px] rounded-sm border shrink-0 ${STATUS_KIND_CLASSES[statusKind]}`}
           >
-            {hydration.status}
+            {hydration!.status}
           </span>
         )}
         <DeleteButton onDelete={onDelete} />
       </div>
 
-      {/* Chip row */}
-      {chips.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          {chips.map(({ key, label, icon }) =>
-            icon ? (
-              <img key={key} src={icon} alt={label} className="w-3.5 h-3.5" />
-            ) : (
-              <span
-                key={key}
-                className="px-1.5 py-0.5 rounded-sm bg-bg-input text-fg-muted border border-line"
-              >
-                {label}
-              </span>
-            ),
-          )}
-        </div>
-      )}
+      {/* Row 2: title */}
+      <div
+        className={`text-sm font-medium leading-snug overflow-hidden line-clamp-2 ${
+          isError ? "text-fg-muted italic" : "text-fg"
+        }`}
+      >
+        {isAuthError && "🔒 "}
+        {title}
+      </div>
 
-      {/* Footer */}
-      <AuthorFooter
-        authorName={hydration?.authorName}
-        updatedAt={hydration?.updatedAt}
-      />
+      {/* Row 3: footer (chips left, person+date right) — always rendered */}
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-line mt-auto">
+        <div className="flex items-center gap-1 min-w-0 flex-1 overflow-hidden">
+          {chips.map((c) => (
+            <span
+              key={c}
+              className="text-xs px-1.5 py-0.5 rounded-sm bg-bg-input text-fg-muted border border-line shrink-0"
+            >
+              {c}
+            </span>
+          ))}
+        </div>
+        {(person || date) && (
+          <div className="flex items-center gap-1.5 text-xs text-fg-muted shrink-0">
+            {person && (
+              <>
+                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-bg-input text-[10px] shrink-0">
+                  {person[0].toUpperCase()}
+                </span>
+                <span>{person}</span>
+              </>
+            )}
+            {person && date && <span>·</span>}
+            {date && <span>{formatRelative(date)}</span>}
+          </div>
+        )}
+      </div>
     </>
   );
 }
 
-/** Figma card: thumbnail on the left, metadata on the right */
+// ── Figma card ───────────────────────────────────────────────────────────────
+
 function FigmaCard({
   link,
   hydration,
@@ -202,42 +191,53 @@ function FigmaCard({
   title: string;
 }) {
   return (
-    <div className="flex flex-row gap-3">
-      {hydration?.thumbnailUrl && (
-        <img
-          src={hydration.thumbnailUrl}
-          alt=""
-          className="w-12 h-9 rounded-sm object-cover shrink-0 self-start mt-0.5"
-        />
-      )}
-      <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <SourceBadge source={link.source} />
-          <span
-            className={`flex-1 text-sm font-medium truncate min-w-0 ${
-              isError ? "text-fg-muted italic" : "text-fg"
-            }`}
-          >
-            {isAuthError && "🔒 "}
-            {title}
-          </span>
-          <DeleteButton onDelete={onDelete} />
+    <>
+      {/* Row 1 */}
+      <div className="flex items-center gap-2 min-w-0">
+        <SourceBadge source={link.source} />
+        <div className="flex-1" />
+        <DeleteButton onDelete={onDelete} />
+      </div>
+
+      {/* Row 2: thumbnail + title */}
+      <div className="flex flex-row gap-3 min-w-0">
+        {hydration?.thumbnailUrl && (
+          <img
+            src={hydration.thumbnailUrl}
+            alt=""
+            className="w-12 h-9 rounded-sm object-cover shrink-0 self-start mt-0.5"
+          />
+        )}
+        <div
+          className={`text-sm font-medium leading-snug line-clamp-2 min-w-0 ${
+            isError ? "text-fg-muted italic" : "text-fg"
+          }`}
+        >
+          {isAuthError && "🔒 "}
+          {title}
         </div>
+      </div>
+
+      {/* Row 3: footer */}
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-line mt-auto">
         {hydration?.subtitle && (
-          <span className="text-xs px-1.5 py-0.5 rounded-sm bg-bg-input text-fg-muted border border-line self-start">
+          <span className="text-xs px-1.5 py-0.5 rounded-sm bg-bg-input text-fg-muted border border-line">
             {hydration.subtitle}
           </span>
         )}
-        <AuthorFooter
-          authorName={hydration?.authorName}
-          updatedAt={hydration?.updatedAt}
-        />
+        <div className="flex-1" />
+        {hydration?.authorName && (
+          <span className="text-xs text-fg-muted shrink-0">
+            {hydration.authorName}
+          </span>
+        )}
       </div>
-    </div>
+    </>
   );
 }
 
-/** Slack card: message preview as primary content */
+// ── Slack card ───────────────────────────────────────────────────────────────
+
 function SlackCard({
   link,
   hydration,
@@ -253,29 +253,23 @@ function SlackCard({
   isAuthError: boolean;
   title: string;
 }) {
-  const hasFooter = !!(
-    hydration?.authorName ||
-    hydration?.updatedAt ||
-    (hydration?.commentCount != null && hydration.commentCount > 0) ||
-    hydration?.reactions?.length
-  );
-
   return (
     <>
-      {/* Top row: source badge + channel chip + delete */}
-      <div className="flex items-center gap-2">
+      {/* Row 1: source + channel chip + delete */}
+      <div className="flex items-center gap-2 min-w-0">
         <SourceBadge source={link.source} />
         {hydration?.subtitle && (
-          <span className="text-xs px-1.5 py-0.5 rounded-sm bg-bg-input text-fg-muted border border-line">
+          <span className="text-xs px-1.5 py-0.5 rounded-sm bg-bg-input text-fg-muted border border-line shrink-0">
             {hydration.subtitle}
           </span>
         )}
+        <div className="flex-1" />
         <DeleteButton onDelete={onDelete} />
       </div>
 
-      {/* Message body */}
+      {/* Row 2: message body */}
       <p
-        className={`text-sm line-clamp-2 ${
+        className={`text-sm leading-snug line-clamp-2 ${
           isError ? "text-fg-muted italic" : "text-fg"
         }`}
       >
@@ -283,27 +277,26 @@ function SlackCard({
         {title}
       </p>
 
-      {/* Footer */}
-      {hasFooter && (
-        <div className="flex items-center gap-1.5 text-xs text-fg-muted flex-wrap">
+      {/* Row 3: footer */}
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-line mt-auto">
+        <div className="flex items-center gap-1.5 text-xs text-fg-muted min-w-0 flex-1 overflow-hidden">
           {hydration?.authorName && (
             <>
               <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-bg-input text-[10px] shrink-0">
                 {hydration.authorName[0].toUpperCase()}
               </span>
-              <span>{hydration.authorName}</span>
+              <span className="truncate">{hydration.authorName}</span>
             </>
           )}
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-fg-muted shrink-0">
           {hydration?.updatedAt && (
-            <>
-              {hydration.authorName && <span>·</span>}
-              <span>{formatRelative(hydration.updatedAt)}</span>
-            </>
+            <span>{formatRelative(hydration.updatedAt)}</span>
           )}
           {hydration?.commentCount != null && hydration.commentCount > 0 && (
-            <span className="ml-auto">💬 {hydration.commentCount}</span>
+            <span>💬 {hydration.commentCount}</span>
           )}
-          {hydration?.reactions?.slice(0, 3).map((r) => (
+          {hydration?.reactions?.slice(0, 2).map((r) => (
             <span
               key={r.name}
               className="px-1 py-0.5 rounded-sm bg-bg-input border border-line"
@@ -312,7 +305,7 @@ function SlackCard({
             </span>
           ))}
         </div>
-      )}
+      </div>
     </>
   );
 }
@@ -325,17 +318,19 @@ function StandardSkeleton({ link }: { link: WorkspaceLink }) {
       <div className="flex items-center gap-2 min-w-0">
         <SourceBadge source={link.source} />
         <span className="shimmer-bar w-16" />
-        <span className="shimmer-bar flex-1" />
+        <div className="flex-1" />
         <span className="shimmer-bar w-14 rounded-sm" />
       </div>
-      <div className="flex items-center gap-1.5">
-        <span className="shimmer-bar w-12" />
-        <span className="shimmer-bar w-20" />
-      </div>
-      <div className="flex items-center gap-1.5">
-        <span className="shimmer-bar w-4 h-4 rounded-full" />
-        <span className="shimmer-bar w-24" />
-        <span className="shimmer-bar w-10" />
+      <span className="shimmer-bar w-full block" />
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-line mt-auto">
+        <div className="flex items-center gap-1.5">
+          <span className="shimmer-bar w-12" />
+          <span className="shimmer-bar w-16" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="shimmer-bar w-4 h-4 rounded-full" />
+          <span className="shimmer-bar w-20" />
+        </div>
       </div>
     </>
   );
@@ -343,17 +338,20 @@ function StandardSkeleton({ link }: { link: WorkspaceLink }) {
 
 function FigmaSkeleton({ link }: { link: WorkspaceLink }) {
   return (
-    <div className="flex flex-row gap-3">
-      <span className="shimmer-bar w-12 h-9 rounded-sm shrink-0" />
-      <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <SourceBadge source={link.source} />
-          <span className="shimmer-bar flex-1" />
-        </div>
+    <>
+      <div className="flex items-center gap-2 min-w-0">
+        <SourceBadge source={link.source} />
+        <div className="flex-1" />
+      </div>
+      <div className="flex flex-row gap-3">
+        <span className="shimmer-bar w-12 h-9 rounded-sm shrink-0" />
+        <span className="shimmer-bar flex-1" />
+      </div>
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-line mt-auto">
         <span className="shimmer-bar w-16" />
         <span className="shimmer-bar w-20" />
       </div>
-    </div>
+    </>
   );
 }
 
@@ -364,16 +362,22 @@ function SlackSkeleton({ link }: { link: WorkspaceLink }) {
         <SourceBadge source={link.source} />
         <span className="shimmer-bar w-20" />
       </div>
-      <span className="shimmer-bar w-full" />
-      <span className="shimmer-bar w-3/4" />
-      <div className="flex items-center gap-1.5">
-        <span className="shimmer-bar w-4 h-4 rounded-full" />
-        <span className="shimmer-bar w-16" />
+      <div>
+        <span className="shimmer-bar w-full block mb-1" />
+        <span className="shimmer-bar w-3/4 block" />
+      </div>
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-line mt-auto">
+        <div className="flex items-center gap-1.5">
+          <span className="shimmer-bar w-4 h-4 rounded-full" />
+          <span className="shimmer-bar w-24" />
+        </div>
         <span className="shimmer-bar w-10" />
       </div>
     </>
   );
 }
+
+// ── Main export ──────────────────────────────────────────────────────────────
 
 export function LinkCard({
   link,
@@ -396,7 +400,8 @@ export function LinkCard({
 
   return (
     <div
-      className="flex flex-col gap-2 p-3 rounded-md border border-line bg-bg-card hover:bg-bg-card-hover hover:border-line-hover cursor-pointer transition-colors group relative"
+      className="flex flex-col gap-2 rounded-md border border-line bg-bg-card hover:bg-bg-card-hover hover:border-line-hover cursor-pointer transition-colors group relative"
+      style={{ padding: "14px 16px" }}
       onClick={() => window.api.shell.openExternal(link.url)}
       title={errorTooltip}
     >

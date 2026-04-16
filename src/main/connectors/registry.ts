@@ -13,6 +13,7 @@ import {
   resolveActiveStrategy,
   hydrateViaStrategy,
   SUPPORTED_STRATEGIES,
+  cloudMcpKey,
 } from "./strategy";
 import { err } from "./types";
 import type { Connector } from "./types";
@@ -86,11 +87,14 @@ export function listConnectors(): ConnectorStatus[] {
     const hasMcp =
       mcpServers.has(c.source) &&
       SUPPORTED_STRATEGIES[c.source].includes("mcp");
+    const hasCloudMcp =
+      getSecret(cloudMcpKey(c.source)) !== undefined &&
+      SUPPORTED_STRATEGIES[c.source].includes("cloud-mcp");
     const activeStrategy =
       resolveActiveStrategy(c.source, mcpServers) ?? undefined;
     return {
       source: c.source,
-      configured: raw !== undefined || hasMcp,
+      configured: raw !== undefined || hasMcp || hasCloudMcp,
       activeStrategy,
       maskedKey: pickMaskedKey(raw, c.secretFields),
       publicFields: pickPublicFields(raw, c.secretFields),
@@ -138,4 +142,12 @@ export function setConnectorConfig(
 
 export function removeConnectorConfig(source: ConnectorSource): void {
   deleteSecret(secretKey(source));
+}
+
+export function enableCloudMcp(source: ConnectorSource): void {
+  setSecret(cloudMcpKey(source), { enabled: true });
+}
+
+export function disableCloudMcp(source: ConnectorSource): void {
+  deleteSecret(cloudMcpKey(source));
 }

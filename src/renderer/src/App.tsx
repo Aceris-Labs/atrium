@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { WorkspaceCard } from "./components/WorkspaceCard";
 import { WorkspaceDetail } from "./components/WorkspaceDetail";
 import { AddWorkspaceModal } from "./components/AddWorkspaceModal";
@@ -32,6 +32,21 @@ export default function App() {
   const [showCreateWing, setShowCreateWing] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draggingPR, setDraggingPR] = useState<PRStatus | null>(null);
+  const [draggingWorkspace, setDraggingWorkspace] = useState<Workspace | null>(
+    null,
+  );
+  const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
+  const draggingGroupIdRef = useRef<string | null>(null);
+  const [groupDropTarget, setGroupDropTarget] = useState<string | null>(null);
+  // null = no indicator; "__end__" = after last section; else = before that section id
+  const [groupInsertBefore, setGroupInsertBefore] = useState<string | null>(
+    null,
+  );
+  const groupInsertBeforeRef = useRef<string | null>(null);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [showNewGroupInput, setShowNewGroupInput] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupName, setEditingGroupName] = useState("");
   const [watchedPRStatuses, setWatchedPRStatuses] = useState<PRStatus[]>([]);
   const [loadingWatched, setLoadingWatched] = useState<WorkspacePR[]>([]);
   const [linkedPRStatuses, setLinkedPRStatuses] = useState<PRStatus[]>([]);
@@ -56,7 +71,18 @@ export default function App() {
     const results = await Promise.all(
       unique.map((p) => window.api.github.fetchPR(p.repo, p.number)),
     );
-    setLinkedPRStatuses(results.filter((r): r is PRStatus => r !== null));
+    setLinkedPRStatuses((prev) => {
+      const fresh = results.filter((r): r is PRStatus => r !== null);
+      const freshKeys = new Set(fresh.map((r) => `${r.repo}-${r.number}`));
+      // Keep old data for any PR where the fetch failed (transient error) so
+      // cards don't vanish and re-appear during a brief sync hiccup.
+      const retained = prev.filter(
+        (old) =>
+          !freshKeys.has(`${old.repo}-${old.number}`) &&
+          unique.some((u) => u.repo === old.repo && u.number === old.number),
+      );
+      return [...fresh, ...retained];
+    });
   }
 
   const syncAll = useCallback(async (wingId: string | null) => {
@@ -301,6 +327,122 @@ export default function App() {
     }
   }
 
+  const STATUS_IDS = ["active", "blocked", "done", "archived"] as const;
+  type StatusId = (typeof STATUS_IDS)[number];
+  const STATUS_LABELS: Record<StatusId, string> = {
+    active: "Active",
+    blocked: "Blocked",
+    done: "Done",
+    archived: "Archived",
+  };
+
+  async function handleAddGroup() {
+    const name = newGroupName.trim();
+    if (!name || !activeWingId) return;
+    const wing = wings.find((w) => w.id === activeWingId);
+    if (!wing) return;
+    const id = crypto.randomUUID();
+    const updatedCustomGroups = [...(wing.customGroups ?? []), { id, name }];
+    const updatedGroupOrder = [...(wing.groupOrder ?? [...STATUS_IDS]), id];
+    const updated = await window.api.wings.update({
+      ...wing,
+      customGroups: updatedCustomGroups,
+      groupOrder: updatedGroupOrder,
+    });
+    setWings((prev) => prev.map((w) => (w.id === updated.id ? updated : w)));
+    setNewGroupName("");
+    setShowNewGroupInput(false);
+  }
+
+  async function handleDropWorkspaceOnGroup(
+    workspace: Workspace,
+    groupId: string,
+  ) {
+    if ((STATUS_IDS as readonly string[]).includes(groupId)) {
+      await handleUpdate({
+        ...workspace,
+        status: groupId as StatusId,
+        groupId: undefined,
+      });
+    } else {
+      await handleUpdate({ ...workspace, groupId });
+    }
+  }
+
+  async function handleReorderGroups(
+    draggedId: string,
+    insertBeforeId: string | null,
+  ) {
+    if (!activeWingId) return;
+    const wing = wings.find((w) => w.id === activeWingId);
+    if (!wing) return;
+    const rawOrder = wing.groupOrder ?? [];
+    // Normalize: ensure all status IDs are present (may be absent in legacy data)
+    const order = [
+      ...rawOrder,
+      ...STATUS_IDS.filter((id) => !rawOrder.includes(id)),
+    ];
+    const from = order.indexOf(draggedId);
+    if (from === -1) return;
+    const next = [...order];
+    next.splice(from, 1);
+    if (!insertBeforeId || insertBeforeId === "__end__") {
+      next.push(draggedId);
+    } else {
+      const to = next.indexOf(insertBeforeId);
+      if (to === -1) {
+        next.push(draggedId);
+      } else {
+        next.splice(to, 0, draggedId);
+      }
+    }
+    const updated = await window.api.wings.update({
+      ...wing,
+      groupOrder: next,
+    });
+    setWings((prev) => prev.map((w) => (w.id === updated.id ? updated : w)));
+  }
+
+  async function handleDeleteGroup(groupId: string) {
+    if (!activeWingId) return;
+    const wing = wings.find((w) => w.id === activeWingId);
+    if (!wing) return;
+    // Move all spaces in this group back to their status group
+    const spacesInGroup = workspaces.filter((w) => w.groupId === groupId);
+    await Promise.all(
+      spacesInGroup.map((ws) => handleUpdate({ ...ws, groupId: undefined })),
+    );
+    const updatedCustomGroups = (wing.customGroups ?? []).filter(
+      (g) => g.id !== groupId,
+    );
+    const updatedGroupOrder = (wing.groupOrder ?? [...STATUS_IDS]).filter(
+      (id) => id !== groupId,
+    );
+    const updated = await window.api.wings.update({
+      ...wing,
+      customGroups: updatedCustomGroups,
+      groupOrder: updatedGroupOrder,
+    });
+    setWings((prev) => prev.map((w) => (w.id === updated.id ? updated : w)));
+  }
+
+  async function handleRenameGroup(groupId: string, name: string) {
+    const trimmed = name.trim();
+    if (!trimmed || !activeWingId) return;
+    const wing = wings.find((w) => w.id === activeWingId);
+    if (!wing) return;
+    const updatedCustomGroups = (wing.customGroups ?? []).map((g) =>
+      g.id === groupId ? { ...g, name: trimmed } : g,
+    );
+    const updated = await window.api.wings.update({
+      ...wing,
+      customGroups: updatedCustomGroups,
+    });
+    setWings((prev) => prev.map((w) => (w.id === updated.id ? updated : w)));
+    setEditingGroupId(null);
+    setEditingGroupName("");
+  }
+
   const allPRs = [...myPRs, ...reviewPRs, ...linkedPRStatuses].reduce<
     PRStatus[]
   >((acc, pr) => {
@@ -412,8 +554,49 @@ export default function App() {
   const unlinkedMyPRs = myPRs.filter(
     (pr) => !linkedPRKeys.has(`${pr.repo ?? ""}-${pr.number}`),
   );
-  const activeWorkspaces = workspaces.filter((w) => w.status === "active");
-  const otherWorkspaces = workspaces.filter((w) => w.status !== "active");
+  const customGroupMap = new Map(
+    (activeWing?.customGroups ?? []).map((g) => [g.id, g]),
+  );
+  const rawGroupOrder = activeWing?.groupOrder ?? [];
+  // Normalize: ensure all status IDs are always present, appended after any explicit order
+  const groupOrder = [
+    ...rawGroupOrder,
+    ...STATUS_IDS.filter((id) => !rawGroupOrder.includes(id)),
+  ];
+
+  // Spaces pinned to a valid custom group
+  const customGroupedIds = new Set(
+    workspaces
+      .filter((w) => w.groupId && customGroupMap.has(w.groupId))
+      .map((w) => w.id),
+  );
+  const ungroupedSpaces = workspaces.filter((w) => !customGroupedIds.has(w.id));
+
+  type GroupSection = {
+    id: string;
+    name: string;
+    spaces: Workspace[];
+    isStatus: boolean;
+  };
+
+  const groupSections: GroupSection[] = groupOrder.flatMap((gid) => {
+    if ((STATUS_IDS as readonly string[]).includes(gid)) {
+      const spaces = ungroupedSpaces.filter((w) => w.status === gid);
+      if (spaces.length === 0) return [];
+      return [
+        {
+          id: gid,
+          name: STATUS_LABELS[gid as StatusId],
+          spaces,
+          isStatus: true,
+        },
+      ];
+    }
+    const group = customGroupMap.get(gid);
+    if (!group) return [];
+    const spaces = workspaces.filter((w) => w.groupId === gid);
+    return [{ id: gid, name: group.name, spaces, isStatus: false }];
+  });
 
   return (
     <div className="layout">
@@ -463,71 +646,231 @@ export default function App() {
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title">Spaces</span>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => setShowAdd(true)}
-            >
-              + New
-            </button>
+            <div className="flex items-center gap-2">
+              {showNewGroupInput ? (
+                <>
+                  <input
+                    className="form-input form-input-sm w-[180px]"
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleAddGroup();
+                      if (e.key === "Escape") {
+                        setShowNewGroupInput(false);
+                        setNewGroupName("");
+                      }
+                    }}
+                    placeholder="Group name"
+                    // eslint-disable-next-line jsx-a11y/no-autofocus
+                    autoFocus
+                  />
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleAddGroup}
+                  >
+                    Add
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      setShowNewGroupInput(false);
+                      setNewGroupName("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setShowNewGroupInput(true)}
+                  >
+                    + Group
+                  </button>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => setShowAdd(true)}
+                  >
+                    + New
+                  </button>
+                </>
+              )}
+            </div>
           </div>
           <div className="panel-body">
-            {activeWorkspaces.length > 0 && (
-              <div className="section">
-                <div className="section-header">
-                  <span className="section-title">Active</span>
-                  <span className="section-count">
-                    {activeWorkspaces.length}
-                  </span>
-                </div>
-                <div className="card-grid">
-                  {activeWorkspaces.map((ws) => (
-                    <WorkspaceCard
-                      key={ws.id}
-                      workspace={ws}
-                      prStatuses={allPRs}
-                      tmuxRunning={
-                        ws.tmuxSession
-                          ? tmuxSessions.includes(ws.tmuxSession)
-                          : false
+            {groupSections.map((section, idx) => {
+              const isGroupDropTarget = groupDropTarget === section.id;
+              const canDropWorkspace =
+                draggingWorkspace !== null &&
+                (section.isStatus
+                  ? draggingWorkspace.groupId !== undefined ||
+                    draggingWorkspace.status !== section.id
+                  : draggingWorkspace.groupId !== section.id);
+              const isDraggingGroup = draggingGroupId !== null;
+
+              return (
+                <Fragment key={section.id}>
+                  {groupInsertBefore === section.id && isDraggingGroup && (
+                    <div className="h-0.5 bg-blue rounded-full mx-1" />
+                  )}
+                  <div
+                    className="section"
+                    onDragOver={(e) => {
+                      const draggedGroupId = draggingGroupIdRef.current;
+                      if (canDropWorkspace) {
+                        e.preventDefault();
+                        setGroupDropTarget(section.id);
+                      } else if (
+                        draggedGroupId &&
+                        draggedGroupId !== section.id
+                      ) {
+                        e.preventDefault();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const inTopHalf =
+                          e.clientY < rect.top + rect.height / 2;
+                        const insertBefore = inTopHalf
+                          ? section.id
+                          : (groupSections[idx + 1]?.id ?? "__end__");
+                        setGroupInsertBefore(insertBefore);
+                        groupInsertBeforeRef.current = insertBefore;
                       }
-                      agentStatus={agentStatuses[ws.id] ?? "no-session"}
-                      onClick={() => setSelectedId(ws.id)}
-                      draggingPR={draggingPR}
-                      onDrop={(pr) => handleDropPR(ws, pr)}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-            {otherWorkspaces.length > 0 && (
-              <div className="section">
-                <div className="section-header">
-                  <span className="section-title">Other</span>
-                  <span className="section-count">
-                    {otherWorkspaces.length}
-                  </span>
-                </div>
-                <div className="card-grid">
-                  {otherWorkspaces.map((ws) => (
-                    <WorkspaceCard
-                      key={ws.id}
-                      workspace={ws}
-                      prStatuses={allPRs}
-                      tmuxRunning={
-                        ws.tmuxSession
-                          ? tmuxSessions.includes(ws.tmuxSession)
-                          : false
+                    }}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        setGroupDropTarget(null);
+                        setGroupInsertBefore(null);
+                        groupInsertBeforeRef.current = null;
                       }
-                      agentStatus={agentStatuses[ws.id] ?? "no-session"}
-                      onClick={() => setSelectedId(ws.id)}
-                      draggingPR={draggingPR}
-                      onDrop={(pr) => handleDropPR(ws, pr)}
-                    />
-                  ))}
-                </div>
-              </div>
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const draggedGroupId = draggingGroupIdRef.current;
+                      if (draggingWorkspace && canDropWorkspace) {
+                        handleDropWorkspaceOnGroup(
+                          draggingWorkspace,
+                          section.id,
+                        );
+                        setGroupDropTarget(null);
+                      } else if (
+                        draggedGroupId &&
+                        draggedGroupId !== section.id
+                      ) {
+                        handleReorderGroups(
+                          draggedGroupId,
+                          groupInsertBeforeRef.current,
+                        );
+                        draggingGroupIdRef.current = null;
+                        setDraggingGroupId(null);
+                        setGroupInsertBefore(null);
+                        groupInsertBeforeRef.current = null;
+                      }
+                    }}
+                  >
+                    <div
+                      className="section-header cursor-grab"
+                      draggable
+                      onDragStart={(e) => {
+                        e.stopPropagation();
+                        draggingGroupIdRef.current = section.id;
+                        setDraggingGroupId(section.id);
+                      }}
+                      onDragEnd={() => {
+                        draggingGroupIdRef.current = null;
+                        setDraggingGroupId(null);
+                        setGroupInsertBefore(null);
+                        groupInsertBeforeRef.current = null;
+                      }}
+                    >
+                      <span className="text-fg-muted text-xs mr-1 select-none">
+                        ⠿
+                      </span>
+                      {!section.isStatus && editingGroupId === section.id ? (
+                        <input
+                          className="section-title bg-transparent border-b border-line-hover outline-none w-[120px]"
+                          value={editingGroupName}
+                          onChange={(e) => setEditingGroupName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter")
+                              handleRenameGroup(section.id, editingGroupName);
+                            if (e.key === "Escape") {
+                              setEditingGroupId(null);
+                              setEditingGroupName("");
+                            }
+                          }}
+                          onBlur={() =>
+                            handleRenameGroup(section.id, editingGroupName)
+                          }
+                          // eslint-disable-next-line jsx-a11y/no-autofocus
+                          autoFocus
+                        />
+                      ) : (
+                        <span className="section-title">{section.name}</span>
+                      )}
+                      <span className="section-count">
+                        {section.spaces.length}
+                      </span>
+                      {!section.isStatus && (
+                        <div className="ml-auto flex items-center gap-2">
+                          <button
+                            className="text-fg-muted hover:text-fg text-xs leading-none"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingGroupId(section.id);
+                              setEditingGroupName(section.name);
+                            }}
+                            title="Rename group"
+                          >
+                            ✎
+                          </button>
+                          <button
+                            className="text-fg-muted hover:text-fg text-sm leading-none"
+                            onClick={() => handleDeleteGroup(section.id)}
+                            title="Remove group"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div
+                      className={`card-grid rounded-md transition-colors${isGroupDropTarget ? " outline outline-2 outline-offset-2 outline-line-hover" : ""}`}
+                    >
+                      {section.spaces.map((ws) => (
+                        <WorkspaceCard
+                          key={ws.id}
+                          workspace={ws}
+                          prStatuses={allPRs}
+                          tmuxRunning={
+                            ws.tmuxSession
+                              ? tmuxSessions.includes(ws.tmuxSession)
+                              : false
+                          }
+                          agentStatus={agentStatuses[ws.id] ?? "no-session"}
+                          onClick={() => setSelectedId(ws.id)}
+                          draggingPR={draggingWorkspace ? null : draggingPR}
+                          onDrop={(pr) => handleDropPR(ws, pr)}
+                          onWorkspaceDragStart={() => setDraggingWorkspace(ws)}
+                          onWorkspaceDragEnd={() => {
+                            setDraggingWorkspace(null);
+                            setGroupDropTarget(null);
+                          }}
+                        />
+                      ))}
+                      {section.spaces.length === 0 && (
+                        <div className="text-sm text-fg-muted italic py-2 px-1">
+                          Drop spaces here
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            })}
+            {groupInsertBefore === "__end__" && draggingGroupId !== null && (
+              <div className="h-0.5 bg-blue rounded-full mx-1" />
             )}
-            {workspaces.length === 0 && (
+            {workspaces.length === 0 && groupSections.length === 0 && (
               <div className="empty">
                 <div className="empty-title">No spaces yet</div>
                 <p>

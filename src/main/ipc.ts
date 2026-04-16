@@ -34,9 +34,11 @@ import {
   removeConnectorConfig,
   setConnectorConfig,
   testConnector,
+  enableCloudMcp,
+  disableCloudMcp,
 } from "./connectors/registry";
 import { startLinearOAuth } from "./oauth/linear";
-import { hydrateLinks, refreshLink } from "./linkHydration";
+import { hydrateLinks, refreshLink, getCachedLinks } from "./linkHydration";
 import type {
   Workspace,
   Wing,
@@ -165,6 +167,12 @@ export function registerIpcHandlers(): void {
     (_, source: ConnectorSource, config?: unknown) =>
       testConnector(source, config),
   );
+  ipcMain.handle("connectors:cloud-mcp:enable", (_, source: ConnectorSource) =>
+    enableCloudMcp(source),
+  );
+  ipcMain.handle("connectors:cloud-mcp:disable", (_, source: ConnectorSource) =>
+    disableCloudMcp(source),
+  );
   ipcMain.handle("connectors:oauth", async (_, source: ConnectorSource) => {
     if (source !== "linear") {
       return { ok: false, error: "OAuth not supported for this connector" };
@@ -184,6 +192,9 @@ export function registerIpcHandlers(): void {
   });
 
   // ── Link hydration ───────────────────────────────────────────────────────
+  ipcMain.handle("links:getCached", (_, urls: string[]) =>
+    getCachedLinks(urls),
+  );
   ipcMain.handle("links:hydrate", (_, urls: string[]) => hydrateLinks(urls));
   ipcMain.handle("links:refresh", (_, url: string) => refreshLink(url));
 }

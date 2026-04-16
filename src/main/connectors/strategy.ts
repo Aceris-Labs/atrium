@@ -1,4 +1,7 @@
-import { spawnSync } from "child_process";
+import { spawnSync, execFileSync } from "child_process";
+import { existsSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import { getSecret } from "../secrets";
 import { discoverMcpServers } from "../mcp/discovery";
 import { getMcpClient } from "../mcp/client";
@@ -16,11 +19,12 @@ export const SUPPORTED_STRATEGIES: Record<
   ConnectorSource,
   ConnectorStrategy[]
 > = {
-  linear: ["mcp", "api-key", "oauth", "agent"],
-  notion: ["mcp", "api-key", "agent"],
-  jira: ["mcp", "api-key", "agent"],
-  confluence: ["mcp", "api-key", "agent"],
-  slack: ["mcp", "api-key", "agent"],
+  // cloud-mcp before api-key: prefer Claude Code cloud MCPs over manual credentials
+  linear: ["mcp", "cloud-mcp", "api-key", "oauth"],
+  notion: ["mcp", "cloud-mcp", "api-key"],
+  jira: ["mcp", "api-key"],
+  confluence: ["mcp", "api-key"],
+  slack: ["mcp", "cloud-mcp", "api-key"],
   discord: ["api-key"],
   coda: ["api-key"],
   figma: ["api-key"],
@@ -29,8 +33,45 @@ export const SUPPORTED_STRATEGIES: Record<
 // Cache the result for the app lifetime — the claude binary won't move during a session.
 let _claudePath: string | undefined | null = null;
 
+/**
+ * Find the claude CLI binary. Electron GUI apps don't inherit the user's full
+ * shell PATH (e.g. ~/.local/bin is not in /etc/paths), so we can't rely on
+ * `which claude` alone. Check well-known install locations first, then fall
+ * back to asking the user's login shell.
+ */
 function findClaudePath(): string | undefined {
   if (_claudePath !== null) return _claudePath;
+
+  // 1. Well-known install locations (works in packaged Electron with no shell PATH)
+  const candidates = [
+    join(homedir(), ".local", "bin", "claude"),
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude",
+    "/usr/bin/claude",
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      _claudePath = p;
+      return _claudePath;
+    }
+  }
+
+  // 2. Ask the login shell (handles nvm, asdf, pyenv, and other PATH managers)
+  try {
+    const shell = process.env.SHELL ?? "/bin/zsh";
+    const out = execFileSync(shell, ["-l", "-c", "which claude"], {
+      encoding: "utf-8",
+      timeout: 3000,
+    }).trim();
+    if (out) {
+      _claudePath = out;
+      return _claudePath;
+    }
+  } catch {
+    // shell not found or which failed — fall through
+  }
+
+  // 3. Standard which (in case Electron's PATH has it)
   const result = spawnSync("which", ["claude"], { encoding: "utf-8" });
   _claudePath =
     result.status === 0 && result.stdout.trim()
@@ -41,6 +82,11 @@ function findClaudePath(): string | undefined {
 
 function secretKey(source: ConnectorSource): string {
   return `connector:${source}`;
+}
+
+/** Separate key so cloud-mcp enablement doesn't conflict with api-key/oauth credentials */
+export function cloudMcpKey(source: ConnectorSource): string {
+  return `cloudmcp:${source}`;
 }
 
 function isOAuthConfig(raw: unknown): boolean {
@@ -116,6 +162,20 @@ export async function detectStrategies(
       continue;
     }
 
+    if (strategy === "cloud-mcp") {
+      const claudePath = findClaudePath();
+      const enabled =
+        claudePath !== undefined &&
+        getSecret(cloudMcpKey(source)) !== undefined;
+      results.push({
+        strategy: "cloud-mcp",
+        available: claudePath !== undefined,
+        configured: enabled,
+        detail: enabled ? "via Claude Code cloud MCP" : undefined,
+      });
+      continue;
+    }
+
     if (strategy === "agent") {
       const claudePath = findClaudePath();
       results.push({
@@ -147,6 +207,13 @@ export function resolveActiveStrategy(
 
   if (supported.includes("mcp") && mcpServers.has(source)) return "mcp";
 
+  if (
+    supported.includes("cloud-mcp") &&
+    findClaudePath() &&
+    getSecret(cloudMcpKey(source)) !== undefined
+  )
+    return "cloud-mcp";
+
   const stored = getSecret(secretKey(source));
   if (stored) {
     if (supported.includes("oauth") && isOAuthConfig(stored)) return "oauth";
@@ -175,7 +242,7 @@ export async function hydrateViaStrategy(
     return hydrateMcp(source, url, getMcpClient(serverConfig));
   }
 
-  if (active === "agent") {
+  if (active === "cloud-mcp" || active === "agent") {
     const claudePath = findClaudePath();
     if (!claudePath) return null;
     return hydrateViaAgent(claudePath, source, url);

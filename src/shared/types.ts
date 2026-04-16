@@ -8,6 +8,7 @@ export interface Workspace {
   title: string;
   type: "feature" | "research" | "bug";
   status: "active" | "blocked" | "done" | "archived";
+  groupId?: string; // if set, pinned to a custom group; otherwise auto-bucketed by status
   repo?: string; // "owner/repo" — the primary/default repo for this workspace
   branch?: string;
   directoryPath?: string; // absolute path to the space's working directory (may be a plain dir, a git repo, or a worktree)
@@ -157,7 +158,20 @@ export interface FigmaConfig {
   personalAccessToken: string;
 }
 
-export type ConnectorStrategy = "mcp" | "api-key" | "oauth" | "agent";
+/**
+ * "mcp"       — local stdio MCP server found in ~/.claude/settings.json or ~/.mcp.json
+ * "cloud-mcp" — claude.ai cloud-managed MCP (e.g. Linear, Notion, Slack integrations);
+ *               hydrated by spawning `claude -p` and letting it call its cloud tools
+ * "api-key"   — direct API call with a stored credential
+ * "oauth"     — OAuth token (Linear only)
+ * "agent"     — generic claude subprocess fallback (no specific MCP tool)
+ */
+export type ConnectorStrategy =
+  | "mcp"
+  | "cloud-mcp"
+  | "api-key"
+  | "oauth"
+  | "agent";
 
 export interface StrategyStatus {
   strategy: ConnectorStrategy;
@@ -197,6 +211,10 @@ export interface Wing {
   rootDir?: string;
   // undefined → inherit the global defaultLaunchProfile
   launchProfile?: LaunchAction[];
+  /** User-created groups (in addition to auto status groups) */
+  customGroups?: { id: string; name: string }[];
+  /** Ordered list of group IDs — status IDs ("active","blocked","done","archived") + custom group IDs */
+  groupOrder?: string[];
   createdAt: string;
 }
 
@@ -338,8 +356,11 @@ export type WindowApi = {
       config?: unknown,
     ) => Promise<ConnectorTestResult>;
     startOAuth: (source: ConnectorSource) => Promise<ConnectorTestResult>;
+    enableCloudMcp: (source: ConnectorSource) => Promise<void>;
+    disableCloudMcp: (source: ConnectorSource) => Promise<void>;
   };
   links: {
+    getCached: (urls: string[]) => Promise<Record<string, LinkStatus>>;
     hydrate: (urls: string[]) => Promise<Record<string, LinkStatus>>;
     refresh: (url: string) => Promise<LinkStatus>;
   };
