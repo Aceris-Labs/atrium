@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { getEffectiveLaunchProfile, updateWorkspace } from "./store";
+import { getEffectiveLaunchProfile, getWing, updateWorkspace } from "./store";
 import type { TmuxPane, Workspace } from "../shared/types";
 
 function resolveDir(dir?: string): string | undefined {
@@ -59,13 +59,7 @@ export function launchWorkspace(wingId: string, workspace: Workspace): string {
         launchEditor(action.app, dir);
         break;
       case "terminal-tmux":
-        launchTerminalTmux(
-          action.app,
-          sessionName,
-          workspace,
-          dir,
-          action.panes,
-        );
+        launchTerminalTmux(action.app, sessionName, workspace, dir, action.panes, wingId);
         break;
       case "terminal-cmd":
         launchTerminalCmd(action.app, action.command, dir);
@@ -113,9 +107,10 @@ function buildPanes(
   actionPanes: TmuxPane[] | undefined,
   workspace: Workspace,
   dir: string,
+  wingId: string,
 ): TmuxPane[] {
   const raw = readProjectPanes(dir) ?? actionPanes ?? DEFAULT_PANES;
-  const claudeCmd = buildClaudeCommand(workspace, dir);
+  const claudeCmd = buildClaudeCommand(workspace, dir, wingId);
   return raw.map((p) => ({
     ...p,
     command: p.command === "${claude}" ? claudeCmd : p.command,
@@ -127,7 +122,8 @@ function launchTerminalTmux(
   sessionName: string,
   workspace: Workspace,
   dir: string | undefined,
-  actionPanes?: TmuxPane[],
+  actionPanes: TmuxPane[] | undefined,
+  wingId: string,
 ): void {
   if (!dir) return;
 
@@ -141,7 +137,7 @@ function launchTerminalTmux(
 
   if (!isTmuxSessionRunning(sessionName)) {
     const s = sessionName;
-    const panes = buildPanes(actionPanes, workspace, dir);
+    const panes = buildPanes(actionPanes, workspace, dir, wingId);
 
     tmux(["new-session", "-d", "-s", s, "-c", dir]);
     if (panes[0]?.command) {
@@ -306,8 +302,9 @@ function activateApp(app: string): void {
   }
 }
 
-function buildClaudeCommand(workspace: Workspace, dir: string): string {
-  const lines: string[] = [`# Atrium Context: ${workspace.title}`, ""];
+function buildClaudeCommand(workspace: Workspace, dir: string, wingId: string): string {
+  const wingName = getWing(wingId)?.name ?? wingId;
+  const lines: string[] = [`# ${wingName} / ${workspace.title}`, ""];
   const todos = workspace.todos ?? [];
   const pending = todos.filter((t) => !t.done);
   const done = todos.filter((t) => t.done);
