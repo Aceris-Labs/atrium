@@ -6,6 +6,8 @@ import type {
   LaunchAction,
   ConnectorSource,
   AgentSessionInfo,
+  PRStatus,
+  LinkStatus,
 } from "../shared/types";
 
 const api: WindowApi = {
@@ -46,6 +48,30 @@ const api: WindowApi = {
       ipcRenderer.invoke("workspace:launch", wingId, workspace),
     stop: (workspaceId: string) =>
       ipcRenderer.invoke("workspace:stop", workspaceId),
+    generateDigest: (
+      workspace: Workspace,
+      prStatuses: PRStatus[],
+      linkStatuses: Record<string, LinkStatus>,
+    ) =>
+      ipcRenderer.invoke(
+        "workspace:generateDigest",
+        workspace,
+        prStatuses,
+        linkStatuses,
+      ),
+  },
+  wing: {
+    summarize: (
+      workspaces: Workspace[],
+      prStatuses: PRStatus[],
+      linkStatuses: Record<string, LinkStatus>,
+    ) =>
+      ipcRenderer.invoke(
+        "wing:summarize",
+        workspaces,
+        prStatuses,
+        linkStatuses,
+      ),
   },
   shell: {
     openExternal: (url: string) => shell.openExternal(url),

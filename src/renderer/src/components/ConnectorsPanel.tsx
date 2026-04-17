@@ -22,6 +22,8 @@ interface ConnectorMeta {
   fields: ConnectorField[];
   helpText?: string;
   oauth?: boolean;
+  /** CLI-backed connector: no forms, just status + re-check button */
+  cliConnector?: boolean;
 }
 
 const CONNECTORS: ConnectorMeta[] = [
@@ -128,6 +130,22 @@ const CONNECTORS: ConnectorMeta[] = [
       },
     ],
   },
+  {
+    source: "github",
+    name: "GitHub CLI",
+    fields: [],
+    cliConnector: true,
+    helpText:
+      "Uses your existing `gh` CLI authentication. Run `gh auth login` to authenticate.",
+  },
+  {
+    source: "claude",
+    name: "Claude Code",
+    fields: [],
+    cliConnector: true,
+    helpText:
+      "Uses the `claude` CLI. Install with: npm install -g @anthropic-ai/claude-code",
+  },
 ];
 
 function strategyLabel(strategy: ConnectorStrategy): string {
@@ -142,6 +160,8 @@ function strategyLabel(strategy: ConnectorStrategy): string {
       return "OAuth";
     case "agent":
       return "Agent";
+    case "gh-cli":
+      return "GitHub CLI";
   }
 }
 
@@ -462,6 +482,25 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
                 </div>
               )}
 
+              {/* Re-check button for CLI-backed connectors */}
+              {meta.cliConnector && (
+                <div className="flex items-center gap-2 pt-1">
+                  {meta.helpText && (
+                    <p className="text-xs text-fg-muted flex-1">
+                      {meta.helpText}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm flex-shrink-0"
+                    onClick={() => setStrategies(null)}
+                    disabled={loadingStrategies}
+                  >
+                    {loadingStrategies ? "Checking…" : "Re-check"}
+                  </button>
+                </div>
+              )}
+
               {/* Footer hints */}
               {cloudMcpStrategy?.configured && (
                 <p className="text-xs text-fg-muted">
@@ -608,6 +647,17 @@ function StrategyRow({
         </button>
       );
     }
+  } else if (s.strategy === "gh-cli") {
+    if (s.configured) {
+      cta = <span className="text-xs text-green">Active</span>;
+    } else if (!s.available) {
+      cta = (
+        <span className="text-xs text-fg-muted font-['SF_Mono','Fira_Code',monospace]">
+          brew install gh
+        </span>
+      );
+    }
+    // not configured but available: detail already shows "run: gh auth login"
   }
 
   return (

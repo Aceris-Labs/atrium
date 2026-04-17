@@ -11,6 +11,8 @@ export interface Connector<Config = unknown> {
   match(url: string): boolean;
   hydrate(url: string, config: Config): Promise<LinkStatus>;
   test(config: Config): Promise<ConnectorTestResult>;
+  /** Override configured-status check for CLI-backed connectors that store no secrets. */
+  checkConfigured?(): boolean;
 }
 
 export function nowIso(): string {

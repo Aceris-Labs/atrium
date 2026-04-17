@@ -28,10 +28,13 @@ export const SUPPORTED_STRATEGIES: Record<
   discord: ["api-key"],
   coda: ["api-key"],
   figma: ["api-key"],
+  github: ["gh-cli"],
+  claude: ["agent"],
 };
 
-// Cache the result for the app lifetime — the claude binary won't move during a session.
+// Cache results for the app lifetime — binaries won't move during a session.
 let _claudePath: string | undefined | null = null;
+let _ghPath: string | undefined | null = null;
 
 /**
  * Find the claude CLI binary. Electron GUI apps don't inherit the user's full
@@ -39,7 +42,7 @@ let _claudePath: string | undefined | null = null;
  * `which claude` alone. Check well-known install locations first, then fall
  * back to asking the user's login shell.
  */
-function findClaudePath(): string | undefined {
+export function findClaudePath(): string | undefined {
   if (_claudePath !== null) return _claudePath;
 
   // 1. Well-known install locations (works in packaged Electron with no shell PATH)
@@ -78,6 +81,44 @@ function findClaudePath(): string | undefined {
       ? result.stdout.trim()
       : undefined;
   return _claudePath;
+}
+
+/** Find the gh CLI binary, checking well-known locations then the login shell. */
+export function findGhPath(): string | undefined {
+  if (_ghPath !== null) return _ghPath;
+
+  const candidates = [
+    "/opt/homebrew/bin/gh",
+    "/usr/local/bin/gh",
+    "/usr/bin/gh",
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      _ghPath = p;
+      return _ghPath;
+    }
+  }
+
+  try {
+    const shell = process.env.SHELL ?? "/bin/zsh";
+    const out = execFileSync(shell, ["-l", "-c", "which gh"], {
+      encoding: "utf-8",
+      timeout: 3000,
+    }).trim();
+    if (out) {
+      _ghPath = out;
+      return _ghPath;
+    }
+  } catch {
+    // fall through
+  }
+
+  const result = spawnSync("which", ["gh"], { encoding: "utf-8" });
+  _ghPath =
+    result.status === 0 && result.stdout.trim()
+      ? result.stdout.trim()
+      : undefined;
+  return _ghPath;
 }
 
 function secretKey(source: ConnectorSource): string {
@@ -186,6 +227,34 @@ export async function detectStrategies(
       });
       continue;
     }
+
+    if (strategy === "gh-cli") {
+      const ghPath = findGhPath();
+      if (!ghPath) {
+        results.push({
+          strategy: "gh-cli",
+          available: false,
+          configured: false,
+        });
+        continue;
+      }
+      const auth = spawnSync(ghPath, ["auth", "status"], { encoding: "utf-8" });
+      const authenticated = auth.status === 0;
+      const text = auth.stdout + auth.stderr;
+      const match = text.match(/account\s+(\S+)/i);
+      const username = match?.[1];
+      results.push({
+        strategy: "gh-cli",
+        available: true,
+        configured: authenticated,
+        detail: authenticated
+          ? username
+            ? `as ${username}`
+            : undefined
+          : "run: gh auth login",
+      });
+      continue;
+    }
   }
 
   return results;
@@ -220,6 +289,7 @@ export function resolveActiveStrategy(
     if (supported.includes("api-key")) return "api-key";
   }
 
+  if (supported.includes("gh-cli") && findGhPath()) return "gh-cli";
   if (supported.includes("agent") && findClaudePath()) return "agent";
   return null;
 }

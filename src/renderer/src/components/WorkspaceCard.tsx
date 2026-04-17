@@ -117,9 +117,11 @@ export function WorkspaceCard({
       onDragLeave={() => setIsOver(false)}
       onDrop={(e) => {
         e.preventDefault();
-        e.stopPropagation();
         setIsOver(false);
-        if (draggingPR && !alreadyLinked) onDrop(draggingPR);
+        if (draggingPR && !alreadyLinked) {
+          e.stopPropagation();
+          onDrop(draggingPR);
+        }
       }}
     >
       <div className="card-header">

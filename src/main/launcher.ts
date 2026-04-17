@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from "child_process";
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { getEffectiveLaunchProfile, updateWorkspace } from "./store";
-import type { Workspace } from "../shared/types";
+import type { TmuxPane, Workspace } from "../shared/types";
 
 function resolveDir(dir?: string): string | undefined {
   if (!dir) return undefined;
@@ -59,7 +59,13 @@ export function launchWorkspace(wingId: string, workspace: Workspace): string {
         launchEditor(action.app, dir);
         break;
       case "terminal-tmux":
-        launchTerminalTmux(action.app, sessionName, workspace, dir);
+        launchTerminalTmux(
+          action.app,
+          sessionName,
+          workspace,
+          dir,
+          action.panes,
+        );
         break;
       case "terminal-cmd":
         launchTerminalCmd(action.app, action.command, dir);
@@ -84,11 +90,44 @@ function launchEditor(app: string, directoryPath?: string): void {
   }).unref();
 }
 
+const DEFAULT_PANES: TmuxPane[] = [
+  { command: "nvim" },
+  { split: "h", size: 40, command: "${claude}", focus: true },
+  { split: "v" },
+];
+
+function readProjectPanes(dir: string): TmuxPane[] | undefined {
+  const configPath = join(dir, ".atrium.json");
+  if (!existsSync(configPath)) return undefined;
+  try {
+    const raw = JSON.parse(readFileSync(configPath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    if (Array.isArray(raw.panes)) return raw.panes as TmuxPane[];
+  } catch {}
+  return undefined;
+}
+
+function buildPanes(
+  actionPanes: TmuxPane[] | undefined,
+  workspace: Workspace,
+  dir: string,
+): TmuxPane[] {
+  const raw = readProjectPanes(dir) ?? actionPanes ?? DEFAULT_PANES;
+  const claudeCmd = buildClaudeCommand(workspace, dir);
+  return raw.map((p) => ({
+    ...p,
+    command: p.command === "${claude}" ? claudeCmd : p.command,
+  }));
+}
+
 function launchTerminalTmux(
   app: string,
   sessionName: string,
   workspace: Workspace,
   dir: string | undefined,
+  actionPanes?: TmuxPane[],
 ): void {
   if (!dir) return;
 
@@ -102,25 +141,48 @@ function launchTerminalTmux(
 
   if (!isTmuxSessionRunning(sessionName)) {
     const s = sessionName;
+    const panes = buildPanes(actionPanes, workspace, dir);
 
     tmux(["new-session", "-d", "-s", s, "-c", dir]);
-    tmux(["send-keys", "-t", s, "nvim", "Enter"]);
+    if (panes[0]?.command) {
+      tmux(["send-keys", "-t", s, panes[0].command, "Enter"]);
+    }
 
-    tmux(["split-window", "-h", "-t", s, "-p", "40", "-c", dir]);
-    tmux(["send-keys", "-t", s, buildClaudeCommand(workspace, dir), "Enter"]);
+    let focusIndex: number | undefined = panes[0]?.focus ? 0 : undefined;
 
-    tmux(["split-window", "-v", "-t", s, "-c", dir]);
+    for (let i = 1; i < panes.length; i++) {
+      const pane = panes[i];
+      const splitArgs = [
+        "split-window",
+        pane.split === "v" ? "-v" : "-h",
+        "-t",
+        s,
+      ];
+      if (pane.size !== undefined) splitArgs.push("-p", String(pane.size));
+      splitArgs.push("-c", dir);
+      tmux(splitArgs);
+      if (pane.command) {
+        tmux(["send-keys", "-t", s, pane.command, "Enter"]);
+      }
+      if (pane.focus) focusIndex = i;
+    }
 
-    tmux(["select-pane", "-t", s, "-U"]);
+    if (focusIndex !== undefined) {
+      tmux(["select-pane", "-t", `${s}:0.${focusIndex}`]);
+    }
   }
 
-  // Try switch-client first, fall back to opening a new terminal window
+  // Try switch-client first (reuse an existing tmux client), fall back to
+  // opening a new terminal window. Only activate the app when reusing an
+  // existing window — when spawning a new one, the new window will come to
+  // front on its own. Calling activateApp before the window exists just
+  // foregrounds whatever window was already open.
   const switched = tmux(["switch-client", "-t", sessionName]);
   if (switched.status !== 0) {
     openTerminalWithTmux(app, sessionName, dir);
+  } else {
+    activateApp(app);
   }
-
-  activateApp(app);
 }
 
 // Returns the session's starting directory (tmux `session_path`, which
@@ -267,16 +329,18 @@ function buildClaudeCommand(workspace: Workspace, dir: string): string {
     lines.push("");
   }
   if (workspace.branch) lines.push("## Branch", workspace.branch, "");
-  const b64 = Buffer.from(lines.join("\n")).toString("base64");
+  const contextPath = `/tmp/atrium-context-${workspace.id}.md`;
+  writeFileSync(contextPath, lines.join("\n"), "utf-8");
   const id = workspace.claudeSessionId;
   const resumeFlag = id ? `--resume ${id} ` : "";
-  return `claude ${resumeFlag}--append-system-prompt "$(echo ${b64} | base64 -d)"`;
+  return `claude ${resumeFlag}--append-system-prompt "$(cat ${contextPath})"`;
 }
 
 // Returns the ~/.claude/projects/<slug> directory for a given working dir.
 // Claude derives the slug by replacing all `/` in the absolute cwd with `-`.
 function claudeProjectDir(dir: string): string {
-  const slug = stripTrailingSlash(dir).replace(/\//g, "-");
+  const resolved = resolveDir(dir) ?? dir;
+  const slug = stripTrailingSlash(resolved).replace(/\//g, "-");
   return join(homedir(), ".claude", "projects", slug);
 }
 

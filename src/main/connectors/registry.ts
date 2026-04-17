@@ -3,6 +3,8 @@ import { discoverMcpServers } from "../mcp/discovery";
 import { codaConnector } from "./coda";
 import { confluenceConnector } from "./confluence";
 import { figmaConnector } from "./figma";
+import { githubConnector } from "./github";
+import { claudeConnector } from "./claude";
 import { jiraConnector } from "./jira";
 import { linearConnector } from "./linear";
 import { notionConnector } from "./notion";
@@ -34,6 +36,8 @@ const CONNECTORS: Connector[] = [
   discordConnector,
   codaConnector,
   figmaConnector,
+  githubConnector,
+  claudeConnector,
 ];
 
 function secretKey(source: ConnectorSource): string {
@@ -92,9 +96,12 @@ export function listConnectors(): ConnectorStatus[] {
       SUPPORTED_STRATEGIES[c.source].includes("cloud-mcp");
     const activeStrategy =
       resolveActiveStrategy(c.source, mcpServers) ?? undefined;
+    // CLI-backed connectors override configured status via checkConfigured()
+    const configured =
+      c.checkConfigured?.() ?? (raw !== undefined || hasMcp || hasCloudMcp);
     return {
       source: c.source,
-      configured: raw !== undefined || hasMcp || hasCloudMcp,
+      configured,
       activeStrategy,
       maskedKey: pickMaskedKey(raw, c.secretFields),
       publicFields: pickPublicFields(raw, c.secretFields),
@@ -116,8 +123,10 @@ export async function hydrateOne(url: string): Promise<LinkStatus> {
   const strategyResult = await hydrateViaStrategy(connector.source, url);
   if (strategyResult !== null) return strategyResult;
 
-  // Fall back to direct API connector
-  const config = getSecret(secretKey(connector.source));
+  // For secretless connectors (CLI-backed) pass an empty config object
+  const config =
+    getSecret(secretKey(connector.source)) ??
+    (connector.secretFields.length === 0 ? {} : undefined);
   if (!config) return err("not-configured");
   return connector.hydrate(url, config);
 }
@@ -128,7 +137,11 @@ export async function testConnector(
 ): Promise<ConnectorTestResult> {
   const connector = CONNECTORS.find((c) => c.source === source);
   if (!connector) return { ok: false, error: "Unknown connector" };
-  const cfg = configOverride ?? getSecret(secretKey(source));
+  // Secretless connectors (CLI-backed) use an empty config object
+  const cfg =
+    configOverride ??
+    getSecret(secretKey(source)) ??
+    (connector.secretFields.length === 0 ? {} : undefined);
   if (!cfg) return { ok: false, error: "Not configured" };
   return connector.test(cfg);
 }

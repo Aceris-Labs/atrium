@@ -7,6 +7,7 @@ import { SetupWizard } from "./components/SetupWizard";
 import { PRCard, PRCardSkeleton } from "./components/PRCard";
 import { WingTabs } from "./components/WingTabs";
 import { CreateWingModal } from "./components/CreateWingModal";
+import { WingSummaryModal } from "./components/WingSummaryModal";
 import type {
   PRStatus,
   Workspace,
@@ -30,6 +31,7 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showCreateWing, setShowCreateWing] = useState(false);
+  const [showWingSummary, setShowWingSummary] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draggingPR, setDraggingPR] = useState<PRStatus | null>(null);
   const [draggingWorkspace, setDraggingWorkspace] = useState<Workspace | null>(
@@ -52,6 +54,9 @@ export default function App() {
   const [linkedPRStatuses, setLinkedPRStatuses] = useState<PRStatus[]>([]);
   const [watchInput, setWatchInput] = useState("");
   const [watchError, setWatchError] = useState("");
+  const [hiddenStatuses, setHiddenStatuses] = useState<Set<string>>(new Set());
+  const [showStatusFilter, setShowStatusFilter] = useState(false);
+  const statusFilterRef = useRef<HTMLDivElement>(null);
   const syncRef = useRef(false);
 
   async function loadWorkspaces(wingId: string) {
@@ -281,6 +286,20 @@ export default function App() {
       clearInterval(agentInterval);
     };
   }, [setupDone, activeWingId, syncAll, pollAgents]);
+
+  useEffect(() => {
+    if (!showStatusFilter) return;
+    function handleMouseDown(e: MouseEvent) {
+      if (
+        statusFilterRef.current &&
+        !statusFilterRef.current.contains(e.target as Node)
+      ) {
+        setShowStatusFilter(false);
+      }
+    }
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, [showStatusFilter]);
 
   async function handleAdd(
     data: Omit<Workspace, "id" | "createdAt" | "updatedAt">,
@@ -581,6 +600,7 @@ export default function App() {
 
   const groupSections: GroupSection[] = groupOrder.flatMap((gid) => {
     if ((STATUS_IDS as readonly string[]).includes(gid)) {
+      if (hiddenStatuses.has(gid)) return [];
       const spaces = ungroupedSpaces.filter((w) => w.status === gid);
       if (spaces.length === 0) return [];
       return [
@@ -594,7 +614,9 @@ export default function App() {
     }
     const group = customGroupMap.get(gid);
     if (!group) return [];
-    const spaces = workspaces.filter((w) => w.groupId === gid);
+    const spaces = workspaces.filter(
+      (w) => w.groupId === gid && !hiddenStatuses.has(w.status),
+    );
     return [{ id: gid, name: group.name, spaces, isStatus: false }];
   });
 
@@ -646,7 +668,47 @@ export default function App() {
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title">Spaces</span>
-            <div className="flex items-center gap-2">
+            <div className="relative ml-3" ref={statusFilterRef}>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowStatusFilter((p) => !p)}
+              >
+                Status
+                {hiddenStatuses.size > 0 && (
+                  <span className="ml-1 text-fg-muted text-xs">
+                    {STATUS_IDS.length - hiddenStatuses.size}/
+                    {STATUS_IDS.length}
+                  </span>
+                )}
+                <span className="ml-1 text-fg-muted text-xs">▾</span>
+              </button>
+              {showStatusFilter && (
+                <div className="absolute top-full left-0 mt-1 bg-bg-card border border-line rounded-md py-1 z-10 min-w-[140px] shadow-[0_4px_16px_rgba(0,0,0,0.3)]">
+                  {STATUS_IDS.map((status) => (
+                    <label
+                      key={status}
+                      className="flex items-center gap-2 px-3 py-[6px] cursor-pointer hover:bg-bg-card-hover text-sm text-fg select-none"
+                    >
+                      <input
+                        type="checkbox"
+                        className="accent-green"
+                        checked={!hiddenStatuses.has(status)}
+                        onChange={() =>
+                          setHiddenStatuses((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(status)) next.delete(status);
+                            else next.add(status);
+                            return next;
+                          })
+                        }
+                      />
+                      {STATUS_LABELS[status]}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2 ml-auto">
               {showNewGroupInput ? (
                 <>
                   <input
@@ -682,6 +744,13 @@ export default function App() {
                 </>
               ) : (
                 <>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setShowWingSummary(true)}
+                    title="AI summary of selected spaces"
+                  >
+                    Summarize
+                  </button>
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() => setShowNewGroupInput(true)}
@@ -1006,6 +1075,13 @@ export default function App() {
         <CreateWingModal
           onCreate={handleCreateWing}
           onClose={() => setShowCreateWing(false)}
+        />
+      )}
+      {showWingSummary && (
+        <WingSummaryModal
+          workspaces={workspaces}
+          prStatuses={allPRs}
+          onClose={() => setShowWingSummary(false)}
         />
       )}
       {showSettings && activeWing && (

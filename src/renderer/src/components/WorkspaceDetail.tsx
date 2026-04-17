@@ -17,6 +17,7 @@ import type {
 } from "../../../shared/types";
 
 type Section =
+  | "summary"
   | "prs"
   | "notes"
   | "todos"
@@ -25,6 +26,18 @@ type Section =
   | "messaging"
   | "other"
   | "settings";
+
+function formatRelative(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
 
 interface Props {
   wingId: string;
@@ -124,6 +137,10 @@ export function WorkspaceDetail({
   const [editingDir, setEditingDir] = useState(false);
   const [dirDraft, setDirDraft] = useState(workspace.directoryPath ?? "");
 
+  // Summary tab state
+  const [aboutDraft, setAboutDraft] = useState(workspace.about ?? "");
+  const [generatingDigest, setGeneratingDigest] = useState(false);
+
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   // Derived link groups
@@ -138,14 +155,10 @@ export function WorkspaceDetail({
   );
   const openTodos = todos.filter((t) => !t.done);
 
-  const [activeSection, setActiveSection] = useState<Section>(() => {
-    if (workspace.prs.length > 0) return "prs";
-    if (todos.some((t) => !t.done)) return "todos";
-    if (noteItems.length > 0) return "notes";
-    return "prs";
-  });
+  const [activeSection, setActiveSection] = useState<Section>("summary");
 
   const navItems: { id: Section; label: string; count?: number }[] = [
+    { id: "summary", label: "Summary" },
     { id: "prs", label: "Pull Requests", count: workspace.prs.length },
     { id: "todos", label: "Todos", count: openTodos.length },
     { id: "notes", label: "Notes", count: noteItems.length },
@@ -246,6 +259,29 @@ export function WorkspaceDetail({
     }
     window.api.git.detectRepo(path).then(setBranchRepoInfo);
   }, [showBranchPicker, workspace.directoryPath]);
+
+  function handleSaveAbout() {
+    if (aboutDraft !== (workspace.about ?? "")) {
+      onUpdate({ ...workspace, about: aboutDraft });
+    }
+  }
+
+  async function handleGenerateDigest() {
+    setGeneratingDigest(true);
+    try {
+      const text = await window.api.workspace.generateDigest(
+        workspace,
+        [...prStatuses, ...fetchedPRs],
+        linkHydrations,
+      );
+      onUpdate({
+        ...workspace,
+        digest: { text, generatedAt: new Date().toISOString() },
+      });
+    } finally {
+      setGeneratingDigest(false);
+    }
+  }
 
   async function handleRefreshLinks() {
     const urls = (workspace.links ?? []).map((l) => l.url);
@@ -923,6 +959,213 @@ export function WorkspaceDetail({
 
         {/* Section content */}
         <div className="flex-1 overflow-y-auto px-7 py-6 flex flex-col gap-6">
+          {/* ── Summary ── */}
+          {activeSection === "summary" && (
+            <div className="flex flex-col gap-8">
+              {/* Status snapshot */}
+              {(workspace.prs.length > 0 ||
+                todos.length > 0 ||
+                ticketLinks.length > 0) && (
+                <div className="rounded-md border border-line divide-y divide-line">
+                  {/* Todos row */}
+                  {todos.length > 0 && (
+                    <div className="flex items-center gap-3 px-4 py-3">
+                      <span className="text-xs text-fg-muted w-14 shrink-0">
+                        Todos
+                      </span>
+                      <div className="flex-1 h-1 bg-bg rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-green rounded-full transition-all"
+                          style={{
+                            width: `${(todos.filter((t) => t.done).length / todos.length) * 100}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs text-fg-muted tabular-nums shrink-0">
+                        {todos.filter((t) => t.done).length}/{todos.length} done
+                      </span>
+                    </div>
+                  )}
+
+                  {/* PRs rows */}
+                  {workspace.prs.length > 0 && (
+                    <div className="flex flex-col gap-2 px-4 py-3">
+                      <span className="text-xs text-fg-muted">
+                        Pull Requests
+                      </span>
+                      {linkedPRs.map((pr) => (
+                        <div
+                          key={`${pr.repo ?? ""}-${pr.number}`}
+                          className="flex items-center gap-2 min-w-0"
+                        >
+                          <span className="text-xs text-fg-muted tabular-nums shrink-0">
+                            #{pr.number}
+                          </span>
+                          <span className="text-xs text-fg truncate flex-1">
+                            {pr.title}
+                          </span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {pr.state === "merged" && (
+                              <span className="badge merged">merged</span>
+                            )}
+                            {pr.state === "closed" && (
+                              <span className="badge closed">closed</span>
+                            )}
+                            {pr.state === "open" && pr.isDraft && (
+                              <span className="badge draft">draft</span>
+                            )}
+                            {pr.state === "open" && (
+                              <span className={`badge ci-${pr.ciStatus}`}>
+                                CI
+                              </span>
+                            )}
+                            {pr.state === "open" &&
+                              pr.reviewDecision === "APPROVED" && (
+                                <span className="badge review-approved">
+                                  approved
+                                </span>
+                              )}
+                            {pr.state === "open" &&
+                              pr.reviewDecision === "CHANGES_REQUESTED" && (
+                                <span className="badge review-changes-requested">
+                                  changes
+                                </span>
+                              )}
+                            {pr.state === "open" &&
+                              pr.reviewDecision === "REVIEW_REQUIRED" && (
+                                <span className="badge review-required">
+                                  review
+                                </span>
+                              )}
+                          </div>
+                        </div>
+                      ))}
+                      {workspace.prs
+                        .filter(
+                          (p) =>
+                            !linkedPRs.find(
+                              (lp) =>
+                                lp.repo === p.repo && lp.number === p.number,
+                            ),
+                        )
+                        .map((p) => (
+                          <div
+                            key={`${p.repo}-${p.number}`}
+                            className="flex items-center gap-2"
+                          >
+                            <span className="text-xs text-fg-muted tabular-nums shrink-0">
+                              #{p.number}
+                            </span>
+                            <span className="shimmer-bar flex-1" />
+                          </div>
+                        ))}
+                    </div>
+                  )}
+
+                  {/* Tickets rows */}
+                  {ticketLinks.length > 0 && (
+                    <div className="flex flex-col gap-2 px-4 py-3">
+                      <span className="text-xs text-fg-muted">Tickets</span>
+                      {ticketLinks.map((link) => {
+                        const h = linkHydrations[link.url];
+                        const isLoading = hydrationPending.has(link.url);
+                        return (
+                          <div
+                            key={link.id}
+                            className="flex items-center gap-2 min-w-0 cursor-pointer"
+                            onClick={() =>
+                              window.api.shell.openExternal(link.url)
+                            }
+                          >
+                            <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-sm bg-bg-input border border-line text-fg-muted shrink-0">
+                              {link.source}
+                            </span>
+                            {isLoading ? (
+                              <span className="shimmer-bar flex-1" />
+                            ) : (
+                              <>
+                                <span className="text-xs text-fg truncate flex-1">
+                                  {h?.identifier
+                                    ? `${h.identifier} · ${h.title || link.label}`
+                                    : (h?.title ?? link.label)}
+                                </span>
+                                {h?.status && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded-sm border bg-bg-input text-fg-muted border-line shrink-0">
+                                    {h.status}
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* About — user-owned */}
+              <div className="flex flex-col gap-3">
+                <span className="detail-section-title">About</span>
+                <textarea
+                  className="w-full bg-bg-input border border-line rounded-md text-sm text-fg placeholder:text-fg-muted px-3 py-2.5 resize-none leading-relaxed outline-none focus:border-line-hover"
+                  rows={5}
+                  value={aboutDraft}
+                  onChange={(e) => setAboutDraft(e.target.value)}
+                  onBlur={handleSaveAbout}
+                  placeholder="Describe what this space is working on, its goals, key decisions…"
+                />
+              </div>
+
+              {/* Agent digest — AI-generated */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="detail-section-title">Agent Digest</span>
+                  <div className="flex-1" />
+                  {workspace.digest?.generatedAt && !generatingDigest && (
+                    <span className="text-xs text-fg-muted">
+                      {formatRelative(workspace.digest.generatedAt)}
+                    </span>
+                  )}
+                  <button
+                    className="btn btn-ghost btn-sm flex items-center gap-1.5"
+                    onClick={handleGenerateDigest}
+                    disabled={generatingDigest}
+                  >
+                    {generatingDigest && (
+                      <div
+                        className="spinner shrink-0"
+                        style={{ width: 10, height: 10, borderWidth: 1.5 }}
+                      />
+                    )}
+                    {generatingDigest
+                      ? "Generating…"
+                      : workspace.digest
+                        ? "Regenerate"
+                        : "Generate"}
+                  </button>
+                </div>
+                {generatingDigest ? (
+                  <div className="flex flex-col gap-2">
+                    <span className="shimmer-bar w-full block" />
+                    <span className="shimmer-bar w-4/5 block" />
+                    <span className="shimmer-bar w-full block" />
+                    <span className="shimmer-bar w-3/5 block" />
+                  </div>
+                ) : workspace.digest?.text ? (
+                  <div className="text-sm text-fg leading-relaxed whitespace-pre-wrap rounded-md border border-line bg-bg-input px-4 py-3">
+                    {workspace.digest.text}
+                  </div>
+                ) : (
+                  <p className="detail-empty-text">
+                    Click Generate to have Claude summarize this space's PRs,
+                    todos, tickets, and notes.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* ── PRs ── */}
           {activeSection === "prs" && (
             <div>

@@ -3,6 +3,11 @@ export interface WorkspacePR {
   number: number;
 }
 
+export interface WorkspaceDigest {
+  text: string;
+  generatedAt: string;
+}
+
 export interface Workspace {
   id: string;
   title: string;
@@ -18,6 +23,8 @@ export interface Workspace {
   todos: TodoItem[];
   notes: NoteItem[];
   links: WorkspaceLink[];
+  about?: string; // user-written description
+  digest?: WorkspaceDigest; // agent-generated summary
   createdAt: string;
   updatedAt: string;
 }
@@ -122,7 +129,9 @@ export type ConnectorSource =
   | "discord"
   | "coda"
   | "figma"
-  | "notion";
+  | "notion"
+  | "github"
+  | "claude";
 
 export interface NotionConfig {
   apiToken: string;
@@ -165,13 +174,15 @@ export interface FigmaConfig {
  * "api-key"   — direct API call with a stored credential
  * "oauth"     — OAuth token (Linear only)
  * "agent"     — generic claude subprocess fallback (no specific MCP tool)
+ * "gh-cli"    — GitHub CLI (`gh`) with its own stored authentication
  */
 export type ConnectorStrategy =
   | "mcp"
   | "cloud-mcp"
   | "api-key"
   | "oauth"
-  | "agent";
+  | "agent"
+  | "gh-cli";
 
 export interface StrategyStatus {
   strategy: ConnectorStrategy;
@@ -196,9 +207,20 @@ export type ConnectorTestResult =
   | { ok: true; identity?: string }
   | { ok: false; error: string };
 
+export interface TmuxPane {
+  command?: string; // "${claude}" expands to the full claude CLI invocation
+  split?: "h" | "v"; // how to split to create this pane (first pane omits this)
+  size?: number; // split percentage (e.g. 40 → -p 40)
+  focus?: boolean; // move focus here after layout is built
+}
+
 export type LaunchAction =
   | { type: "editor"; app: "cursor" | "code" }
-  | { type: "terminal-tmux"; app: "ghostty" | "iterm" | "terminal" | "warp" }
+  | {
+      type: "terminal-tmux";
+      app: "ghostty" | "iterm" | "terminal" | "warp";
+      panes?: TmuxPane[];
+    }
   | {
       type: "terminal-cmd";
       app: "ghostty" | "iterm" | "terminal" | "warp";
@@ -306,6 +328,18 @@ export type WindowApi = {
   workspace: {
     launch: (wingId: string, w: Workspace) => Promise<string>; // returns tmux session name
     stop: (workspaceId: string) => Promise<void>;
+    generateDigest: (
+      workspace: Workspace,
+      prStatuses: PRStatus[],
+      linkStatuses: Record<string, LinkStatus>,
+    ) => Promise<string>;
+  };
+  wing: {
+    summarize: (
+      workspaces: Workspace[],
+      prStatuses: PRStatus[],
+      linkStatuses: Record<string, LinkStatus>,
+    ) => Promise<string>;
   };
   agents: {
     statuses: (

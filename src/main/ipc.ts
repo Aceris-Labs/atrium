@@ -24,6 +24,7 @@ import {
   getDefaultRepo,
 } from "./github";
 import { launchWorkspace, stopSession } from "./launcher";
+import { generateWorkspaceDigest, generateWingSummary } from "./agent/digest";
 import { detectRepo, checkoutBranch } from "./git";
 import { detectTools } from "./setup";
 import { getAgentStatuses, listAvailableSessions } from "./agents";
@@ -45,6 +46,8 @@ import type {
   LaunchAction,
   ConnectorSource,
   AgentSessionInfo,
+  PRStatus,
+  LinkStatus,
 } from "../shared/types";
 
 export function registerIpcHandlers(): void {
@@ -110,6 +113,24 @@ export function registerIpcHandlers(): void {
   );
   ipcMain.handle("workspace:stop", (_, workspaceId: string) =>
     stopSession(workspaceId),
+  );
+  ipcMain.handle(
+    "workspace:generateDigest",
+    (
+      _,
+      workspace: Workspace,
+      prStatuses: PRStatus[],
+      linkStatuses: Record<string, LinkStatus>,
+    ) => generateWorkspaceDigest(workspace, prStatuses, linkStatuses),
+  );
+  ipcMain.handle(
+    "wing:summarize",
+    (
+      _,
+      workspaces: Workspace[],
+      prStatuses: PRStatus[],
+      linkStatuses: Record<string, LinkStatus>,
+    ) => generateWingSummary(workspaces, prStatuses, linkStatuses),
   );
 
   // ── Agents ───────────────────────────────────────────────────────────────

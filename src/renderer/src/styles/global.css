@@ -194,13 +194,6 @@ body,
   box-shadow: 0 0 0 1px var(--border-hover) 22;
 }
 
-.card.blocked {
-  border-color: var(--border-blocked) 66;
-}
-
-.card.blocked:hover {
-  @apply border-line-danger;
-}
 
 /* Card header */
 .card-header {
