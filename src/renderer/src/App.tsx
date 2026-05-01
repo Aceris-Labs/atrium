@@ -14,17 +14,17 @@ import { CreateWingModal } from "./components/CreateWingModal";
 import { WingSummaryModal } from "./components/WingSummaryModal";
 import { WatchPRModal } from "./components/WatchPRModal";
 import { SpacesSidebar } from "./components/SpacesSidebar";
-import { NotesSection } from "./components/NotesSection";
+import { ItemsTab } from "./components/ItemsTab";
 import type {
   PRStatus,
   Workspace,
   Wing,
   WorkspacePR,
   AgentSessionInfo,
-  NoteItem,
+  Item,
 } from "../../shared/types";
 
-type MainTab = "prs" | "notes";
+type MainTab = "prs" | "items";
 
 export default function App() {
   const [wings, setWings] = useState<Wing[]>([]);
@@ -46,7 +46,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [draggingPR, setDraggingPR] = useState<PRStatus | null>(null);
-  const [draggingNote, setDraggingNote] = useState<NoteItem | null>(null);
+  const [draggingItem, setDraggingItem] = useState<Item | null>(null);
   const [watchedPRStatuses, setWatchedPRStatuses] = useState<PRStatus[]>([]);
   const [loadingWatched, setLoadingWatched] = useState<WorkspacePR[]>([]);
   const [linkedPRStatuses, setLinkedPRStatuses] = useState<PRStatus[]>([]);
@@ -118,6 +118,34 @@ export default function App() {
         const statuses = await window.api.agents.statuses(sessionMap);
         setAgentStatuses(statuses);
         fetchLinkedPRs(ws);
+        // Capture latest recap for each workspace with a Claude session, in
+        // parallel. Persist to workspace.recap if the timestamp is newer.
+        const recapResults = await Promise.all(
+          ws.map(async (w) => {
+            if (!w.claudeSessionId) return null;
+            const r = await window.api.agents.recap(sessionMap[w.id]);
+            if (!r) return null;
+            // Only persist when newer than what's already stored
+            if (w.recap && w.recap.capturedAt >= r.timestamp) return null;
+            return {
+              ...w,
+              recap: { text: r.text, capturedAt: r.timestamp },
+            };
+          }),
+        );
+        const updates: Workspace[] = recapResults.filter(
+          (u): u is NonNullable<typeof u> => u !== null,
+        );
+        if (updates.length > 0) {
+          const saved = await window.api.workspaces.updateMany(
+            wingId,
+            updates,
+          );
+          setWorkspaces((prev) => {
+            const byId = new Map(saved.map((w) => [w.id, w]));
+            return prev.map((w) => byId.get(w.id) ?? w);
+          });
+        }
       }
     } finally {
       syncRef.current = false;
@@ -329,21 +357,21 @@ export default function App() {
     setWings((prev) => prev.map((w) => (w.id === saved.id ? saved : w)));
   }
 
-  async function handleDropNoteOnWorkspace(
+  async function handleDropItemOnWorkspace(
     workspace: Workspace,
-    note: NoteItem,
+    item: Item,
   ) {
     if (!activeWing) return;
-    // Move note from wing.notes → workspace.notes
-    const remaining = (activeWing.notes ?? []).filter((n) => n.id !== note.id);
+    // Move item from wing.items → workspace.items
+    const remaining = (activeWing.items ?? []).filter((n) => n.id !== item.id);
     await Promise.all([
-      handleUpdateWing({ ...activeWing, notes: remaining }),
+      handleUpdateWing({ ...activeWing, items: remaining }),
       handleUpdate({
         ...workspace,
-        notes: [note, ...(workspace.notes ?? [])],
+        items: [item, ...(workspace.items ?? [])],
       }),
     ]);
-    setDraggingNote(null);
+    setDraggingItem(null);
   }
 
   async function handleDelete(id: string) {
@@ -587,8 +615,8 @@ export default function App() {
           onUpdateWing={handleUpdateWing}
           draggingPR={draggingPR}
           onDropPR={handleDropPR}
-          draggingNote={draggingNote}
-          onDropNote={handleDropNoteOnWorkspace}
+          draggingItem={draggingItem}
+          onDropItem={handleDropItemOnWorkspace}
           selectedIds={selectedIds}
           onClearSelection={clearSelection}
           onBulkSetStatus={bulkSetStatus}
@@ -649,10 +677,10 @@ export default function App() {
                     Pull Requests
                   </TabButton>
                   <TabButton
-                    active={mainTab === "notes"}
-                    onClick={() => setMainTab("notes")}
+                    active={mainTab === "items"}
+                    onClick={() => setMainTab("items")}
                   >
-                    Notes
+                    Items
                   </TabButton>
                 </div>
                 <div className="flex-1 overflow-y-auto">
@@ -671,17 +699,18 @@ export default function App() {
                         prKey={prKey}
                       />
                     ) : (
-                      <NotesSection
-                        notes={activeWing?.notes ?? []}
-                        onChange={(notes) => {
-                          if (!activeWing) return;
-                          handleUpdateWing({ ...activeWing, notes });
-                        }}
-                        onNoteDragStart={(note) => setDraggingNote(note)}
-                        onNoteDragEnd={() => setDraggingNote(null)}
-                        emptyMessage="No global notes yet. Drag one onto a space to attach it."
-                        placeholder="Add a global note… (⌘↩ to save)"
-                      />
+                      <div className="h-[calc(100vh-260px)] min-h-[400px]">
+                        <ItemsTab
+                          items={activeWing?.items ?? []}
+                          onChange={(items) => {
+                            if (!activeWing) return;
+                            handleUpdateWing({ ...activeWing, items });
+                          }}
+                          emptyMessage="No global items yet. Drag one onto a space to attach it."
+                          onItemDragStart={(item) => setDraggingItem(item)}
+                          onItemDragEnd={() => setDraggingItem(null)}
+                        />
+                      </div>
                     )}
                   </div>
                 </div>

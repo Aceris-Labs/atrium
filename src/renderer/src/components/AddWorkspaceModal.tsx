@@ -18,8 +18,7 @@ export function AddWorkspaceModal({ onAdd, onClose }: Props) {
       type,
       status: "active",
       prs: [],
-      todos: [],
-      notes: [],
+      items: [],
       links: [],
     });
   }

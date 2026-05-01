@@ -9,23 +9,21 @@ import {
   TrashIcon,
 } from "@heroicons/react/20/solid";
 import { PRCard, PRCardSkeleton } from "./PRCard";
-import { Checkbox } from "./Checkbox";
 import { LinkCard } from "./LinkCard";
-import { NotesSection } from "./NotesSection";
+import { ItemsTab } from "./ItemsTab";
 import { CreateWorktreeModal } from "./CreateWorktreeModal";
 import type {
   PRStatus,
   Workspace,
   Wing,
-  TodoItem,
-  NoteItem,
+  Item,
   WorkspaceLink,
   LinkCategory,
   LinkStatus,
   GitRepoInfo,
 } from "../../../shared/types";
 
-type Tab = "overview" | "todos" | "notes" | "links" | "settings";
+type Tab = "overview" | "items" | "links" | "settings";
 
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -91,17 +89,9 @@ export function WorkspaceDetail({
   onMove,
   onRefreshSessions,
 }: Props) {
-  const todos = workspace.todos ?? [];
-  const noteItems: NoteItem[] = Array.isArray(workspace.notes)
-    ? workspace.notes
-    : [];
+  const items: Item[] = workspace.items ?? [];
   const linkItems: WorkspaceLink[] = workspace.links ?? [];
 
-  const [todoInput, setTodoInput] = useState("");
-  const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
-  const [editingTodoText, setEditingTodoText] = useState("");
-  const [draggingTodoId, setDraggingTodoId] = useState<string | null>(null);
-  const [dragOverTodoId, setDragOverTodoId] = useState<string | null>(null);
   const [linkInput, setLinkInput] = useState("");
   const [prInput, setPrInput] = useState("");
   const [prInputError, setPrInputError] = useState("");
@@ -144,22 +134,17 @@ export function WorkspaceDetail({
     key: string;
     before: boolean;
   } | null>(null);
-  const [recap, setRecap] = useState<{
-    text: string;
-    timestamp: string;
-  } | null>(null);
 
   const titleInputRef = useRef<HTMLInputElement>(null);
 
-  const openTodos = todos.filter((t) => !t.done);
+  const openItems = items.filter((i) => !i.done);
   const ticketLinks = linkItems.filter((l) => l.category === "tickets");
 
   const [activeTab, setActiveTab] = useState<Tab>("overview");
 
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: "overview", label: "Overview" },
-    { id: "todos", label: "Todos", count: openTodos.length },
-    { id: "notes", label: "Notes", count: noteItems.length },
+    { id: "items", label: "Items", count: openItems.length },
     { id: "links", label: "Links", count: linkItems.length },
     { id: "settings", label: "Settings" },
   ];
@@ -240,36 +225,7 @@ export function WorkspaceDetail({
 
   const wing = allWings.find((w) => w.id === wingId);
   const effectiveDir = workspace.worktree?.path ?? wing?.projectDir;
-
-  useEffect(() => {
-    if (!workspace.claudeSessionId) {
-      setRecap(null);
-      return;
-    }
-    let cancelled = false;
-    const info = {
-      tmuxSession: workspace.tmuxSession,
-      directoryPath: workspace.worktree?.path ?? wing?.projectDir,
-      claudeSessionId: workspace.claudeSessionId,
-    };
-    async function load() {
-      const r = await window.api.agents.recap(info);
-      if (!cancelled) setRecap(r);
-    }
-    load();
-    const interval = setInterval(load, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    workspace.id,
-    workspace.claudeSessionId,
-    workspace.tmuxSession,
-    workspace.worktree?.path,
-    wing?.projectDir,
-  ]);
+  const recap = workspace.recap;
 
   // Show the worktree's actual current HEAD (so the header reflects shell
   // checkouts), not the saved workspace.branch field.
@@ -369,47 +325,6 @@ export function WorkspaceDetail({
     } finally {
       setDeletingWorktree(false);
     }
-  }
-
-  function handleAddTodo() {
-    const text = todoInput.trim();
-    if (!text) return;
-    const todo: TodoItem = { id: Date.now().toString(36), text, done: false };
-    onUpdate({ ...workspace, todos: [...todos, todo] });
-    setTodoInput("");
-  }
-
-  function handleToggleTodo(id: string) {
-    onUpdate({
-      ...workspace,
-      todos: todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
-    });
-  }
-
-  function handleDeleteTodo(id: string) {
-    onUpdate({ ...workspace, todos: todos.filter((t) => t.id !== id) });
-  }
-
-  function handleEditTodo(id: string, text: string) {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      handleDeleteTodo(id);
-      return;
-    }
-    onUpdate({
-      ...workspace,
-      todos: todos.map((t) => (t.id === id ? { ...t, text: trimmed } : t)),
-    });
-  }
-
-  function handleReorderTodo(draggedId: string, targetId: string) {
-    const arr = [...todos];
-    const from = arr.findIndex((t) => t.id === draggedId);
-    const to = arr.findIndex((t) => t.id === targetId);
-    if (from === -1 || to === -1 || from === to) return;
-    const [item] = arr.splice(from, 1);
-    arr.splice(to, 0, item);
-    onUpdate({ ...workspace, todos: arr });
   }
 
   function classifyUrl(url: string): {
@@ -1126,23 +1041,23 @@ export function WorkspaceDetail({
               </div>
 
               {/* Status snapshot */}
-              {(todos.length > 0 || ticketLinks.length > 0) && (
+              {(items.length > 0 || ticketLinks.length > 0) && (
                 <div className="rounded-md border border-line divide-y divide-line">
-                  {todos.length > 0 && (
+                  {items.length > 0 && (
                     <div className="flex items-center gap-3 px-4 py-3">
                       <span className="text-xs text-fg-muted w-14 shrink-0">
-                        Todos
+                        Items
                       </span>
                       <div className="flex-1 h-1 bg-bg rounded-full overflow-hidden">
                         <div
                           className="h-full bg-green rounded-full transition-all"
                           style={{
-                            width: `${(todos.filter((t) => t.done).length / todos.length) * 100}%`,
+                            width: `${(items.filter((i) => i.done).length / items.length) * 100}%`,
                           }}
                         />
                       </div>
                       <span className="text-xs text-fg-muted tabular-nums shrink-0">
-                        {todos.filter((t) => t.done).length}/{todos.length} done
+                        {items.filter((i) => i.done).length}/{items.length} done
                       </span>
                     </div>
                   )}
@@ -1196,7 +1111,7 @@ export function WorkspaceDetail({
                       Latest recap
                     </span>
                     <span className="text-xs text-fg-muted">
-                      {formatRelative(recap.timestamp)} · from Claude
+                      {formatRelative(recap.capturedAt)} · from Claude
                     </span>
                     <button
                       className="btn btn-ghost btn-sm ml-auto"
@@ -1281,114 +1196,13 @@ export function WorkspaceDetail({
             </div>
           )}
 
-          {activeTab === "todos" && (
-            <div>
-              <div className="todo-input-row">
-                <input
-                  className="todo-input"
-                  value={todoInput}
-                  onChange={(e) => setTodoInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleAddTodo()}
-                  placeholder="Add a todo and press Enter…"
-                />
-              </div>
-              <div className="todo-list">
-                {todos
-                  .filter((t) => !t.done)
-                  .map((todo) => (
-                    <div
-                      key={todo.id}
-                      className={`todo-item${dragOverTodoId === todo.id && draggingTodoId !== todo.id ? " drag-over" : ""}`}
-                      draggable={editingTodoId !== todo.id}
-                      onDragStart={() => setDraggingTodoId(todo.id)}
-                      onDragEnd={() => {
-                        setDraggingTodoId(null);
-                        setDragOverTodoId(null);
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        setDragOverTodoId(todo.id);
-                      }}
-                      onDrop={() => {
-                        if (draggingTodoId)
-                          handleReorderTodo(draggingTodoId, todo.id);
-                        setDraggingTodoId(null);
-                        setDragOverTodoId(null);
-                      }}
-                    >
-                      <Checkbox
-                        checked={false}
-                        onChange={() => handleToggleTodo(todo.id)}
-                      />
-                      {editingTodoId === todo.id ? (
-                        <input
-                          className="todo-edit-input"
-                          // eslint-disable-next-line jsx-a11y/no-autofocus
-                          autoFocus
-                          value={editingTodoText}
-                          onChange={(e) => setEditingTodoText(e.target.value)}
-                          onBlur={() => {
-                            handleEditTodo(todo.id, editingTodoText);
-                            setEditingTodoId(null);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              handleEditTodo(todo.id, editingTodoText);
-                              setEditingTodoId(null);
-                            }
-                            if (e.key === "Escape") {
-                              setEditingTodoId(null);
-                            }
-                          }}
-                        />
-                      ) : (
-                        <span
-                          className="todo-text"
-                          onClick={() => {
-                            setEditingTodoId(todo.id);
-                            setEditingTodoText(todo.text);
-                          }}
-                        >
-                          {todo.text}
-                        </span>
-                      )}
-                      <button
-                        className="todo-delete"
-                        onClick={() => handleDeleteTodo(todo.id)}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                {todos.some((t) => t.done) && (
-                  <div className="todo-done-separator">Done</div>
-                )}
-                {todos
-                  .filter((t) => t.done)
-                  .map((todo) => (
-                    <div key={todo.id} className="todo-item done">
-                      <Checkbox
-                        checked={true}
-                        onChange={() => handleToggleTodo(todo.id)}
-                      />
-                      <span className="todo-text">{todo.text}</span>
-                      <button
-                        className="todo-delete"
-                        onClick={() => handleDeleteTodo(todo.id)}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-              </div>
+          {activeTab === "items" && (
+            <div className="h-[calc(100vh-260px)] min-h-[400px]">
+              <ItemsTab
+                items={items}
+                onChange={(next) => onUpdate({ ...workspace, items: next })}
+              />
             </div>
-          )}
-
-          {activeTab === "notes" && (
-            <NotesSection
-              notes={noteItems}
-              onChange={(notes) => onUpdate({ ...workspace, notes })}
-            />
           )}
 
           {activeTab === "links" && (

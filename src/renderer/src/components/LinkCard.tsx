@@ -96,11 +96,20 @@ function StandardCard({
   const statusKind = resolveKind(hydration);
   const showStatus = !isError && !!hydration?.status;
 
-  // Footer left: priority + labels + team/component chips
+  // Footer left: priority + labels + team/component/project chips
   const chips: string[] = [];
   if (hydration?.priority) chips.push(hydration.priority);
   hydration?.labels?.slice(0, 2).forEach((l) => chips.push(l));
   if (hydration?.subtitle) chips.push(hydration.subtitle);
+  if (hydration?.project && hydration.project !== hydration.subtitle)
+    chips.push(hydration.project);
+
+  // Due date — flag if overdue and unresolved
+  const dueDate = hydration?.dueDate;
+  const overdue =
+    dueDate &&
+    new Date(dueDate).getTime() < Date.now() &&
+    statusKind !== "done";
 
   // Footer right: assignee or last editor + date
   const person = hydration?.assignee ?? hydration?.authorName;
@@ -111,6 +120,14 @@ function StandardCard({
       {/* Row 1: source + identifier — status badge + delete */}
       <div className="flex items-center gap-2 min-w-0">
         <SourceBadge source={link.source} />
+        {hydration?.parent && (
+          <span
+            className="text-[10px] font-mono text-fg-muted shrink-0"
+            title={`Parent of this issue: ${hydration.parent}`}
+          >
+            ↑ {hydration.parent}
+          </span>
+        )}
         {hydration?.identifier && (
           <span className="text-xs font-mono text-fg-muted shrink-0">
             {hydration.identifier}
@@ -122,6 +139,25 @@ function StandardCard({
           </span>
         )}
         <div className="flex-1" />
+        {overdue && (
+          <span
+            className="text-xs px-[6px] py-[1px] rounded-sm border bg-bg-input text-red border-red shrink-0"
+            title={`Due ${formatRelative(dueDate!)}`}
+          >
+            Overdue
+          </span>
+        )}
+        {!overdue && dueDate && (
+          <span
+            className="text-xs px-[6px] py-[1px] rounded-sm border bg-bg-input text-fg-muted border-line shrink-0"
+            title={`Due ${formatRelative(dueDate)}`}
+          >
+            Due {new Date(dueDate).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+            })}
+          </span>
+        )}
         {showStatus && (
           <span
             className={`text-xs px-[6px] py-[1px] rounded-sm border shrink-0 ${STATUS_KIND_CLASSES[statusKind]}`}
@@ -141,6 +177,13 @@ function StandardCard({
         {isAuthError && "🔒 "}
         {title}
       </div>
+
+      {/* Row 2b: description excerpt */}
+      {hydration?.description && !isError && (
+        <p className="text-xs text-fg-muted italic line-clamp-2 leading-snug">
+          {hydration.description}
+        </p>
+      )}
 
       {/* Row 3: footer (chips left, person+date right) — always rendered */}
       <div className="flex items-center justify-between gap-2 pt-2 border-t border-line mt-auto">

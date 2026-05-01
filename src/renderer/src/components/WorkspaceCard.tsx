@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import type { Workspace, PRStatus, NoteItem } from "../../../shared/types";
+import type { Workspace, PRStatus, Item } from "../../../shared/types";
 
 interface Props {
   workspace: Workspace;
@@ -10,8 +10,8 @@ interface Props {
   selected?: boolean;
   draggingPR: PRStatus | null;
   onDrop: (pr: PRStatus) => void;
-  draggingNote?: NoteItem | null;
-  onDropNote?: (note: NoteItem) => void;
+  draggingItem?: Item | null;
+  onDropItem?: (note: Item) => void;
   onWorkspaceDragStart?: () => void;
   onWorkspaceDragEnd?: () => void;
 }
@@ -44,8 +44,8 @@ export function WorkspaceCard({
   selected = false,
   draggingPR,
   onDrop,
-  draggingNote,
-  onDropNote,
+  draggingItem,
+  onDropItem,
   onWorkspaceDragStart,
   onWorkspaceDragEnd,
 }: Props) {
@@ -108,8 +108,8 @@ export function WorkspaceCard({
     ? linkedKeys.has(`${draggingPR.repo ?? ""}-${draggingPR.number}`)
     : false;
   const isPRDropTarget = draggingPR !== null && !alreadyLinked;
-  const isNoteDropTarget = !!draggingNote && !!onDropNote;
-  const isDropTarget = isPRDropTarget || isNoteDropTarget;
+  const isItemDropTarget = !!draggingItem && !!onDropItem;
+  const isDropTarget = isPRDropTarget || isItemDropTarget;
 
   return (
     <div
@@ -135,9 +135,9 @@ export function WorkspaceCard({
         if (draggingPR && !alreadyLinked) {
           e.stopPropagation();
           onDrop(draggingPR);
-        } else if (draggingNote && onDropNote) {
+        } else if (draggingItem && onDropItem) {
           e.stopPropagation();
-          onDropNote(draggingNote);
+          onDropItem(draggingItem);
         }
       }}
     >
@@ -190,6 +190,12 @@ export function WorkspaceCard({
             <span className="pr-number">#{primaryLoading.number}</span>
             <span className="pr-title">Loading…</span>
           </div>
+        ) : workspace.recap?.text ? (
+          <div className="pr-row pr-row-recap">
+            <span className="text-xs text-fg-muted line-clamp-2 leading-snug">
+              {workspace.recap.text}
+            </span>
+          </div>
         ) : (
           <div className="pr-row pr-row-empty">
             <span className="text-fg-muted text-sm italic">
@@ -217,16 +223,20 @@ export function WorkspaceCard({
           </span>
         ) : (
           <div className="card-status-row">
-            <div className="tmux-status">
-              <div className={`tmux-dot ${tmuxRunning ? "running" : ""}`} />
-              {tmuxRunning ? "tmux" : "idle"}
-            </div>
-            {agentStatus !== "no-session" && (
-              <div className={`agent-badge ${agentStatus}`}>
+            {agentStatus !== "no-session" ? (
+              <div
+                className={`agent-badge ${agentStatus}`}
+                title={tmuxRunning ? "tmux running" : "tmux not running"}
+              >
                 <div className={`agent-dot ${agentStatus}`} />
                 {agentStatus === "working" && "claude working"}
                 {agentStatus === "needs-input" && "needs input"}
                 {agentStatus === "idle" && "claude idle"}
+              </div>
+            ) : (
+              <div className="tmux-status">
+                <div className={`tmux-dot ${tmuxRunning ? "running" : ""}`} />
+                {tmuxRunning ? "tmux" : "idle"}
               </div>
             )}
           </div>

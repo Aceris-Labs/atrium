@@ -28,11 +28,17 @@ export interface Workspace {
   prs: WorkspacePR[]; // PRs tracked by this workspace (repo-qualified)
   tmuxSession?: string; // linked tmux session name (for agent status tracking)
   claudeSessionId?: string; // Claude Code session UUID (captured after first launch; used for --resume)
-  todos: TodoItem[];
-  notes: NoteItem[];
+  /** Unified checkable items. Replaces the old todos+notes split. */
+  items: Item[];
+  /** @deprecated migrated to items — left in JSON until storage strips it. */
+  todos?: TodoItem[];
+  /** @deprecated migrated to items — left in JSON until storage strips it. */
+  notes?: NoteItem[];
   links: WorkspaceLink[];
   about?: string; // user-written description
   digest?: WorkspaceDigest; // agent-generated summary
+  /** Latest `away_summary` from Claude's session JSONL — auto-captured. */
+  recap?: { text: string; capturedAt: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -58,12 +64,25 @@ export interface PRStatus {
   repo?: string;
 }
 
+/** Unified todo+note. Title is required and shown in the list; body is
+ *  optional markdown shown in the detail side-panel. All items are checkable. */
+export interface Item {
+  id: string;
+  title: string;
+  body?: string;
+  done: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** @deprecated migrated into `Item` — kept for one-shot data migration only */
 export interface TodoItem {
   id: string;
   text: string;
   done: boolean;
 }
 
+/** @deprecated migrated into `Item` — kept for one-shot data migration only */
 export interface NoteItem {
   id: string;
   text: string;
@@ -126,6 +145,14 @@ export interface LinkStatus {
   authorName?: string; // last editor / Slack user / version.by
   commentCount?: number; // Linear comments.totalCount, Slack reply_count
   reactions?: Array<{ name: string; count: number }>; // Slack
+  /** Short description excerpt (~200 chars) for richer card preview. */
+  description?: string;
+  /** Project / parent context (Linear project name, Notion parent page, etc.) */
+  project?: string;
+  /** Parent issue identifier ("ENG-100") for stack-of-issues navigation. */
+  parent?: string;
+  /** Due date as ISO string. Card highlights overdue. */
+  dueDate?: string;
 }
 
 // ── Connectors ─────────────────────────────────────────────────────────────
@@ -245,7 +272,9 @@ export interface Wing {
   customGroups?: { id: string; name: string }[];
   /** Ordered list of group IDs — only the implicit "active" default group + custom group IDs */
   groupOrder?: string[];
-  /** Wing-level notes (not associated with any space). Drag onto a space to move it there. */
+  /** Wing-level items (not associated with any space). Drag onto a space to move it there. */
+  items?: Item[];
+  /** @deprecated migrated to items */
   notes?: NoteItem[];
   createdAt: string;
 }

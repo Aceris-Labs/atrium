@@ -14,7 +14,57 @@ import type {
   AtriumConfig,
   Wing,
   LaunchAction,
+  Item,
+  TodoItem,
+  NoteItem,
 } from "../shared/types";
+
+function firstLineAndRest(text: string): { title: string; body?: string } {
+  const trimmed = text.trim();
+  const newlineIdx = trimmed.indexOf("\n");
+  if (newlineIdx === -1) return { title: trimmed };
+  return {
+    title: trimmed.slice(0, newlineIdx).trim(),
+    body: trimmed.slice(newlineIdx + 1).trim() || undefined,
+  };
+}
+
+/** One-shot migration of legacy todos/notes into the unified Item array.
+ *  Returns true if anything changed. */
+function migrateToItems(target: {
+  items?: Item[];
+  todos?: TodoItem[];
+  notes?: NoteItem[];
+  createdAt?: string;
+}): boolean {
+  if (target.items !== undefined) return false; // already migrated
+  const items: Item[] = [];
+  const fallbackTime = target.createdAt ?? new Date().toISOString();
+  for (const t of target.todos ?? []) {
+    items.push({
+      id: t.id,
+      title: t.text,
+      done: t.done,
+      createdAt: fallbackTime,
+      updatedAt: fallbackTime,
+    });
+  }
+  for (const n of target.notes ?? []) {
+    const { title, body } = firstLineAndRest(n.text);
+    items.push({
+      id: n.id,
+      title: title || "(untitled)",
+      body,
+      done: false,
+      createdAt: n.createdAt ?? fallbackTime,
+      updatedAt: n.createdAt ?? fallbackTime,
+    });
+  }
+  target.items = items;
+  delete target.todos;
+  delete target.notes;
+  return true;
+}
 
 const DIR = join(homedir(), ".atrium");
 const CONFIG_FILE = join(DIR, "config.json");
@@ -179,7 +229,11 @@ function migrateWingData(raw: Record<string, unknown>): Wing {
     raw.projectDir = raw.rootDir;
     delete raw.rootDir;
   }
-  return raw as unknown as Wing;
+  const wing = raw as unknown as Wing;
+  if (migrateToItems(wing)) {
+    void writeJson(join(wingDir(wing.id), "wing.json"), wing);
+  }
+  return wing;
 }
 
 export function listWings(): Wing[] {
@@ -299,7 +353,7 @@ export function listWorkspaces(wingId: string): Workspace[] {
       delete legacy.worktreePath;
       migrated = true;
     }
-    // Migrate notes: string → NoteItem[]
+    // Migrate notes: string → NoteItem[] (intermediate step before unified items)
     if (typeof ws.notes === "string") {
       ws.notes = (ws.notes as string).trim()
         ? [
@@ -312,6 +366,8 @@ export function listWorkspaces(wingId: string): Workspace[] {
         : [];
       migrated = true;
     }
+    // Migrate todos+notes → unified items
+    if (migrateToItems(ws)) migrated = true;
     if (!ws.links) {
       ws.links = [];
       migrated = true;
@@ -379,6 +435,7 @@ export async function createWorkspace(
       .toLowerCase()
       .replace(/\s+/g, "-")
       .replace(/[^a-z0-9-]/g, ""),
+    items: data.items ?? [],
     createdAt: now,
     updatedAt: now,
   };

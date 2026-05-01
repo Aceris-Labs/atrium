@@ -13,7 +13,7 @@ import type {
   PRStatus,
   Workspace,
   Wing,
-  NoteItem,
+  Item,
 } from "../../../shared/types";
 
 const STATUS_IDS = ["active", "blocked", "done", "archived"] as const;
@@ -49,8 +49,8 @@ interface Props {
 
   draggingPR: PRStatus | null;
   onDropPR: (workspace: Workspace, pr: PRStatus) => void;
-  draggingNote: NoteItem | null;
-  onDropNote: (workspace: Workspace, note: NoteItem) => void;
+  draggingItem: Item | null;
+  onDropItem: (workspace: Workspace, note: Item) => void;
 
   selectedIds: Set<string>;
   onClearSelection: () => void;
@@ -82,8 +82,8 @@ export function SpacesSidebar({
   onUpdateWing,
   draggingPR,
   onDropPR,
-  draggingNote,
-  onDropNote,
+  draggingItem,
+  onDropItem,
   selectedIds,
   onClearSelection,
   onBulkSetStatus,
@@ -606,10 +606,10 @@ export function SpacesSidebar({
                               draggingWorkspace ? null : draggingPR
                             }
                             onDrop={(pr) => onDropPR(ws, pr)}
-                            draggingNote={
-                              draggingWorkspace ? null : draggingNote
+                            draggingItem={
+                              draggingWorkspace ? null : draggingItem
                             }
-                            onDropNote={(note) => onDropNote(ws, note)}
+                            onDropItem={(note) => onDropItem(ws, note)}
                             onWorkspaceDragStart={() =>
                               setDraggingWorkspace(ws)
                             }
