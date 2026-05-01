@@ -1,13 +1,54 @@
-import { useState } from "react";
-import type { Workspace, PRStatus, LinkStatus } from "../../../shared/types";
+import { useState, useMemo } from "react";
+import { Checkbox } from "./Checkbox";
+import type { Workspace, Wing } from "../../../shared/types";
+
+const STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  blocked: "Blocked",
+  done: "Done",
+  archived: "Archived",
+};
 
 interface Props {
   workspaces: Workspace[];
-  prStatuses: PRStatus[];
+  wing: Wing | null;
   onClose: () => void;
 }
 
-export function WingSummaryModal({ workspaces, prStatuses, onClose }: Props) {
+export function WingSummaryModal({ workspaces, wing, onClose }: Props) {
+  const customGroupMap = useMemo(
+    () => new Map((wing?.customGroups ?? []).map((g) => [g.id, g.name])),
+    [wing],
+  );
+
+  function getGroupLabel(w: Workspace): string {
+    if (w.groupId && customGroupMap.has(w.groupId)) {
+      return customGroupMap.get(w.groupId)!;
+    }
+    return STATUS_LABELS[w.status] ?? w.status;
+  }
+
+  const groups = useMemo(() => {
+    const seen = new Map<string, string>(); // id → label
+    for (const w of workspaces) {
+      const id =
+        w.groupId && customGroupMap.has(w.groupId) ? w.groupId : w.status;
+      const label = getGroupLabel(w);
+      if (!seen.has(id)) seen.set(id, label);
+    }
+    return Array.from(seen.entries()).map(([id, label]) => ({ id, label }));
+  }, [workspaces, customGroupMap]);
+
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+
+  const visibleWorkspaces = selectedGroup
+    ? workspaces.filter((w) => {
+        const id =
+          w.groupId && customGroupMap.has(w.groupId) ? w.groupId : w.status;
+        return id === selectedGroup;
+      })
+    : workspaces;
+
   const [selected, setSelected] = useState<Set<string>>(
     new Set(workspaces.map((w) => w.id)),
   );
@@ -17,10 +58,18 @@ export function WingSummaryModal({ workspaces, prStatuses, onClose }: Props) {
   const [copied, setCopied] = useState(false);
 
   function toggleAll() {
-    if (selected.size === workspaces.length) {
-      setSelected(new Set());
+    if (visibleWorkspaces.every((w) => selected.has(w.id))) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        visibleWorkspaces.forEach((w) => next.delete(w.id));
+        return next;
+      });
     } else {
-      setSelected(new Set(workspaces.map((w) => w.id)));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        visibleWorkspaces.forEach((w) => next.add(w.id));
+        return next;
+      });
     }
   }
 
@@ -37,30 +86,15 @@ export function WingSummaryModal({ workspaces, prStatuses, onClose }: Props) {
   }
 
   async function generate() {
-    const selectedWorkspaces = workspaces.filter((w) => selected.has(w.id));
-    if (selectedWorkspaces.length === 0) return;
+    const ids = Array.from(selected);
+    if (ids.length === 0 || !wing) return;
 
     setLoading(true);
     setError(null);
     setResult(null);
 
     try {
-      // Hydrate all links from selected workspaces
-      const allUrls = [
-        ...new Set(
-          selectedWorkspaces.flatMap((w) => w.links.map((l) => l.url)),
-        ),
-      ];
-      let linkStatuses: Record<string, LinkStatus> = {};
-      if (allUrls.length > 0) {
-        linkStatuses = await window.api.links.hydrate(allUrls);
-      }
-
-      const summary = await window.api.wing.summarize(
-        selectedWorkspaces,
-        prStatuses,
-        linkStatuses,
-      );
+      const summary = await window.api.wing.summarize(wing.id, ids);
       setResult(summary);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate summary");
@@ -76,7 +110,10 @@ export function WingSummaryModal({ workspaces, prStatuses, onClose }: Props) {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const allChecked = selected.size === workspaces.length;
+  const allVisibleChecked =
+    visibleWorkspaces.length > 0 &&
+    visibleWorkspaces.every((w) => selected.has(w.id));
+  const someVisibleChecked = visibleWorkspaces.some((w) => selected.has(w.id));
   const noneChecked = selected.size === 0;
 
   return (
@@ -93,35 +130,54 @@ export function WingSummaryModal({ workspaces, prStatuses, onClose }: Props) {
               Select the spaces to include in the summary.
             </p>
 
+            {/* Group filter chips */}
+            {groups.length > 1 && (
+              <div className="flex flex-wrap gap-1 mb-3">
+                <button
+                  className={`px-2 py-0.5 rounded-sm text-xs border transition-colors ${selectedGroup === null ? "bg-bg-card border-line text-fg" : "border-transparent text-fg-muted hover:text-fg hover:bg-bg-card-hover"}`}
+                  onClick={() => setSelectedGroup(null)}
+                >
+                  All
+                </button>
+                {groups.map(({ id, label }) => (
+                  <button
+                    key={id}
+                    className={`px-2 py-0.5 rounded-sm text-xs border transition-colors ${selectedGroup === id ? "bg-bg-card border-line text-fg" : "border-transparent text-fg-muted hover:text-fg hover:bg-bg-card-hover"}`}
+                    onClick={() =>
+                      setSelectedGroup(selectedGroup === id ? null : id)
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Select all toggle */}
             <label className="flex items-center gap-2 text-sm text-fg-muted mb-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={allChecked}
-                ref={(el) => {
-                  if (el) el.indeterminate = !allChecked && !noneChecked;
-                }}
+              <Checkbox
+                checked={allVisibleChecked}
+                indeterminate={!allVisibleChecked && someVisibleChecked}
                 onChange={toggleAll}
-                className="w-4 h-4 rounded border-line accent-blue"
               />
-              All spaces
+              {selectedGroup
+                ? `All in ${groups.find((g) => g.id === selectedGroup)?.label}`
+                : "All spaces"}
             </label>
 
             <div className="flex flex-col gap-1 mb-4 max-h-[200px] overflow-y-auto">
-              {workspaces.map((w) => (
+              {visibleWorkspaces.map((w) => (
                 <label
                   key={w.id}
                   className="flex items-center gap-2 text-sm text-fg cursor-pointer select-none px-1 py-0.5 rounded-sm hover:bg-bg-card-hover"
                 >
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected.has(w.id)}
                     onChange={() => toggle(w.id)}
-                    className="w-4 h-4 rounded border-line accent-blue"
                   />
                   <span className="flex-1 truncate">{w.title}</span>
                   <span className="text-xs text-fg-muted shrink-0">
-                    {w.status}
+                    {getGroupLabel(w)}
                   </span>
                 </label>
               ))}

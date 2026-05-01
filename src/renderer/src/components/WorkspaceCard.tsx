@@ -1,14 +1,17 @@
 import { useState, useEffect } from "react";
-import type { Workspace, PRStatus } from "../../../shared/types";
+import type { Workspace, PRStatus, NoteItem } from "../../../shared/types";
 
 interface Props {
   workspace: Workspace;
   prStatuses: PRStatus[];
   tmuxRunning: boolean;
   agentStatus: "working" | "needs-input" | "idle" | "no-session";
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
+  selected?: boolean;
   draggingPR: PRStatus | null;
   onDrop: (pr: PRStatus) => void;
+  draggingNote?: NoteItem | null;
+  onDropNote?: (note: NoteItem) => void;
   onWorkspaceDragStart?: () => void;
   onWorkspaceDragEnd?: () => void;
 }
@@ -38,8 +41,11 @@ export function WorkspaceCard({
   tmuxRunning,
   agentStatus,
   onClick,
+  selected = false,
   draggingPR,
   onDrop,
+  draggingNote,
+  onDropNote,
   onWorkspaceDragStart,
   onWorkspaceDragEnd,
 }: Props) {
@@ -48,17 +54,23 @@ export function WorkspaceCard({
 
   const linkedKeys = new Set(workspace.prs.map((p) => `${p.repo}-${p.number}`));
   const allKnown = [...prStatuses, ...fetchedPRs];
-  const linkedPRs = allKnown
-    .filter((pr) => linkedKeys.has(`${pr.repo ?? ""}-${pr.number}`))
-    .filter(
-      (pr, i, arr) =>
-        arr.findIndex((p) => p.repo === pr.repo && p.number === pr.number) ===
-        i,
-    );
+  const knownByKey = new Map<string, PRStatus>();
+  for (const pr of allKnown) {
+    const key = `${pr.repo ?? ""}-${pr.number}`;
+    if (linkedKeys.has(key) && !knownByKey.has(key)) knownByKey.set(key, pr);
+  }
+  // Render in workspace.prs order so the user can reorder which PR is "primary".
+  const linkedPRs = workspace.prs
+    .map((p) => knownByKey.get(`${p.repo}-${p.number}`))
+    .filter((pr): pr is PRStatus => pr !== undefined);
   const loadingLinkedPRs = workspace.prs.filter(
     (p) =>
       !linkedPRs.find((lp) => lp.repo === p.repo && lp.number === p.number),
   );
+  const totalPRCount = linkedPRs.length + loadingLinkedPRs.length;
+  const primaryPR = linkedPRs[0];
+  const primaryLoading = !primaryPR ? loadingLinkedPRs[0] : undefined;
+  const overflowCount = totalPRCount > 1 ? totalPRCount - 1 : 0;
 
   useEffect(() => {
     // Cache any linked PRs currently in prStatuses so they survive a
@@ -95,13 +107,15 @@ export function WorkspaceCard({
   const alreadyLinked = draggingPR
     ? linkedKeys.has(`${draggingPR.repo ?? ""}-${draggingPR.number}`)
     : false;
-  const isDropTarget = draggingPR !== null && !alreadyLinked;
+  const isPRDropTarget = draggingPR !== null && !alreadyLinked;
+  const isNoteDropTarget = !!draggingNote && !!onDropNote;
+  const isDropTarget = isPRDropTarget || isNoteDropTarget;
 
   return (
     <div
-      className={`card ${workspace.status}${isOver && isDropTarget ? " drop-target" : ""}${isDropTarget ? " drop-ready" : ""}`}
+      className={`card ${workspace.status}${isOver && isDropTarget ? " drop-target" : ""}${isDropTarget ? " drop-ready" : ""}${selected ? " card-selected" : ""}`}
       draggable={!!onWorkspaceDragStart}
-      onClick={onClick}
+      onClick={(e) => onClick(e)}
       onDragStart={(e) => {
         e.stopPropagation();
         onWorkspaceDragStart?.();
@@ -121,6 +135,9 @@ export function WorkspaceCard({
         if (draggingPR && !alreadyLinked) {
           e.stopPropagation();
           onDrop(draggingPR);
+        } else if (draggingNote && onDropNote) {
+          e.stopPropagation();
+          onDropNote(draggingNote);
         }
       }}
     >
@@ -137,55 +154,66 @@ export function WorkspaceCard({
         </span>
       </div>
 
-      {(linkedPRs.length > 0 || loadingLinkedPRs.length > 0) && (
-        <div className="pr-list">
-          {linkedPRs.map((pr) => (
-            <div
-              key={`${pr.repo ?? ""}-${pr.number}`}
-              className={`pr-row${pr.state === "merged" || pr.state === "closed" ? " opacity-60" : ""}`}
-            >
-              <span className="pr-number">#{pr.number}</span>
-              <span className="pr-title">{pr.title}</span>
-              <div className="pr-badges">
-                {pr.state === "merged" && (
-                  <span className="badge merged">merged</span>
-                )}
-                {pr.state === "closed" && (
-                  <span className="badge closed">closed</span>
-                )}
-                {pr.state === "open" && pr.isDraft && (
-                  <span className="badge draft">draft</span>
-                )}
-                {pr.state === "open" && (
-                  <span className={`badge ci-${pr.ciStatus}`}>
-                    {CI_LABEL[pr.ciStatus]}
-                  </span>
-                )}
-                {pr.state === "open" && pr.reviewDecision && (
-                  <span className={`badge ${REVIEW_CLASS[pr.reviewDecision]}`}>
-                    {REVIEW_LABEL[pr.reviewDecision]}
-                  </span>
-                )}
-              </div>
+      <div className="pr-list pr-list-slot">
+        {primaryPR ? (
+          <div
+            className={`pr-row${primaryPR.state === "merged" || primaryPR.state === "closed" ? " opacity-60" : ""}`}
+          >
+            <span className="pr-number">#{primaryPR.number}</span>
+            <span className="pr-title">{primaryPR.title}</span>
+            <div className="pr-badges">
+              {primaryPR.state === "merged" && (
+                <span className="badge merged">merged</span>
+              )}
+              {primaryPR.state === "closed" && (
+                <span className="badge closed">closed</span>
+              )}
+              {primaryPR.state === "open" && primaryPR.isDraft && (
+                <span className="badge draft">draft</span>
+              )}
+              {primaryPR.state === "open" && (
+                <span className={`badge ci-${primaryPR.ciStatus}`}>
+                  {CI_LABEL[primaryPR.ciStatus]}
+                </span>
+              )}
+              {primaryPR.state === "open" && primaryPR.reviewDecision && (
+                <span
+                  className={`badge ${REVIEW_CLASS[primaryPR.reviewDecision]}`}
+                >
+                  {REVIEW_LABEL[primaryPR.reviewDecision]}
+                </span>
+              )}
             </div>
-          ))}
-          {loadingLinkedPRs.map((p) => (
-            <div
-              key={`${p.repo}-${p.number}`}
-              className="pr-row"
-              style={{ opacity: 0.4 }}
-            >
-              <span className="pr-number">#{p.number}</span>
-              <span className="pr-title">Loading…</span>
-            </div>
-          ))}
-        </div>
-      )}
+          </div>
+        ) : primaryLoading ? (
+          <div className="pr-row" style={{ opacity: 0.4 }}>
+            <span className="pr-number">#{primaryLoading.number}</span>
+            <span className="pr-title">Loading…</span>
+          </div>
+        ) : (
+          <div className="pr-row pr-row-empty">
+            <span className="text-fg-muted text-sm italic">
+              No PRs linked
+            </span>
+          </div>
+        )}
+        {overflowCount > 0 ? (
+          <div className="pr-row pr-row-overflow">
+            <span className="text-xs text-fg-muted">
+              +{overflowCount} more
+            </span>
+          </div>
+        ) : (
+          <div className="pr-row pr-row-overflow" />
+        )}
+      </div>
 
       <div className="card-footer">
         {isOver && isDropTarget ? (
           <span className="drop-hint">
-            Drop to link PR #{draggingPR!.number}
+            {draggingPR
+              ? `Drop to link PR #${draggingPR.number}`
+              : "Drop to attach note"}
           </span>
         ) : (
           <div className="card-status-row">

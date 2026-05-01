@@ -11,8 +11,6 @@ interface Props {
 export function DirectoryField({ directoryPath, branch, onChange }: Props) {
   const [localPath, setLocalPath] = useState(directoryPath ?? "");
   const [repoInfo, setRepoInfo] = useState<GitRepoInfo>({ isRepo: false });
-  const [checkoutError, setCheckoutError] = useState("");
-  const [checkingOut, setCheckingOut] = useState(false);
   const lastDetectedPathRef = useRef<string | null>(null);
 
   // Keep local input in sync when the parent value changes (e.g., switching spaces).
@@ -49,24 +47,8 @@ export function DirectoryField({ directoryPath, branch, onChange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localPath]);
 
-  async function handleBranchSelect(nextBranch: string) {
-    if (
-      !localPath.trim() ||
-      !nextBranch ||
-      nextBranch === repoInfo.currentBranch
-    )
-      return;
-    setCheckingOut(true);
-    setCheckoutError("");
-    const result = await window.api.git.checkoutBranch(
-      localPath.trim(),
-      nextBranch,
-    );
-    setCheckingOut(false);
-    if (!result.ok) {
-      setCheckoutError(result.error);
-      return;
-    }
+  function handleBranchSelect(nextBranch: string) {
+    if (!localPath.trim() || !nextBranch) return;
     setRepoInfo((prev) => ({ ...prev, currentBranch: nextBranch }));
     onChange({ directoryPath: localPath.trim(), branch: nextBranch });
   }
@@ -85,7 +67,6 @@ export function DirectoryField({ directoryPath, branch, onChange }: Props) {
             className="form-select"
             value={repoInfo.currentBranch ?? ""}
             onChange={(e) => handleBranchSelect(e.target.value)}
-            disabled={checkingOut}
           >
             {repoInfo.currentBranch &&
               !repoInfo.branches.includes(repoInfo.currentBranch) && (
@@ -99,13 +80,7 @@ export function DirectoryField({ directoryPath, branch, onChange }: Props) {
               </option>
             ))}
           </select>
-          {checkingOut && (
-            <span className="text-xs text-fg-muted">checking out…</span>
-          )}
         </div>
-      )}
-      {checkoutError && (
-        <span className="text-xs text-red">{checkoutError}</span>
       )}
     </div>
   );

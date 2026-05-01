@@ -8,6 +8,12 @@ export interface WorkspaceDigest {
   generatedAt: string;
 }
 
+export interface Worktree {
+  name: string;
+  path: string; // absolute path on disk
+  createdAt: string;
+}
+
 export interface Workspace {
   id: string;
   title: string;
@@ -16,7 +22,9 @@ export interface Workspace {
   groupId?: string; // if set, pinned to a custom group; otherwise auto-bucketed by status
   repo?: string; // "owner/repo" — the primary/default repo for this workspace
   branch?: string;
-  directoryPath?: string; // absolute path to the space's working directory (may be a plain dir, a git repo, or a worktree)
+  /** @deprecated — legacy field; use wing.projectDir or worktree.path instead */
+  directoryPath?: string;
+  worktree?: Worktree;
   prs: WorkspacePR[]; // PRs tracked by this workspace (repo-qualified)
   tmuxSession?: string; // linked tmux session name (for agent status tracking)
   claudeSessionId?: string; // Claude Code session UUID (captured after first launch; used for --resume)
@@ -215,7 +223,7 @@ export interface TmuxPane {
 }
 
 export type LaunchAction =
-  | { type: "editor"; app: "cursor" | "code" }
+  | { type: "editor"; app: "cursor" | "code"; withClaude?: boolean }
   | {
       type: "terminal-tmux";
       app: "ghostty" | "iterm" | "terminal" | "warp";
@@ -230,18 +238,21 @@ export type LaunchAction =
 export interface Wing {
   id: string;
   name: string;
-  rootDir?: string;
+  projectDir?: string;
   // undefined → inherit the global defaultLaunchProfile
   launchProfile?: LaunchAction[];
   /** User-created groups (in addition to auto status groups) */
   customGroups?: { id: string; name: string }[];
-  /** Ordered list of group IDs — status IDs ("active","blocked","done","archived") + custom group IDs */
+  /** Ordered list of group IDs — only the implicit "active" default group + custom group IDs */
   groupOrder?: string[];
+  /** Wing-level notes (not associated with any space). Drag onto a space to move it there. */
+  notes?: NoteItem[];
   createdAt: string;
 }
 
 export interface AgentSessionInfo {
   tmuxSession?: string;
+  /** Effective launch directory — worktree.path ?? wing.projectDir ?? legacy directoryPath */
   directoryPath?: string;
   claudeSessionId?: string;
 }
@@ -290,19 +301,18 @@ export interface GitRepoInfo {
   branches?: string[];
 }
 
-export type GitCheckoutResult = { ok: true } | { ok: false; error: string };
-
 export type WindowApi = {
   wings: {
     list: () => Promise<Wing[]>;
     create: (data: {
       name: string;
-      rootDir?: string;
+      projectDir?: string;
       launchProfile?: LaunchAction[];
     }) => Promise<Wing>;
     update: (wing: Wing) => Promise<Wing>;
     reorder: (orderedIds: string[]) => Promise<void>;
     setActive: (id: string) => Promise<void>;
+    delete: (id: string) => Promise<void>;
   };
   workspaces: {
     list: (wingId: string) => Promise<Workspace[]>;
@@ -312,6 +322,9 @@ export type WindowApi = {
     ) => Promise<Workspace>;
     update: (wingId: string, w: Workspace) => Promise<Workspace>;
     delete: (wingId: string, id: string) => Promise<void>;
+    updateMany: (wingId: string, updates: Workspace[]) => Promise<Workspace[]>;
+    deleteMany: (wingId: string, ids: string[]) => Promise<void>;
+    reorder: (wingId: string, orderedIds: string[]) => Promise<void>;
     move: (
       fromWingId: string,
       toWingId: string,
@@ -333,13 +346,21 @@ export type WindowApi = {
       prStatuses: PRStatus[],
       linkStatuses: Record<string, LinkStatus>,
     ) => Promise<string>;
+    createWorktree: (
+      wingId: string,
+      workspaceId: string,
+      params:
+        | { tab: "create"; name: string; path: string }
+        | { tab: "script"; command: string },
+    ) => Promise<Workspace>;
+    deleteWorktree: (
+      wingId: string,
+      workspaceId: string,
+      gitRemove: boolean,
+    ) => Promise<Workspace>;
   };
   wing: {
-    summarize: (
-      workspaces: Workspace[],
-      prStatuses: PRStatus[],
-      linkStatuses: Record<string, LinkStatus>,
-    ) => Promise<string>;
+    summarize: (wingId: string, workspaceIds: string[]) => Promise<string>;
   };
   agents: {
     statuses: (
@@ -348,6 +369,9 @@ export type WindowApi = {
       Record<string, "working" | "needs-input" | "idle" | "no-session">
     >;
     sessions: () => Promise<{ name: string; status: string }[]>;
+    recap: (
+      info: AgentSessionInfo | undefined,
+    ) => Promise<{ text: string; timestamp: string } | null>;
   };
   shell: {
     openExternal: (url: string) => Promise<void>;
@@ -372,10 +396,10 @@ export type WindowApi = {
   };
   git: {
     detectRepo: (dirPath: string) => Promise<GitRepoInfo>;
-    checkoutBranch: (
+    currentBranch: (dirPath: string) => Promise<string | null>;
+    listWorktrees: (
       dirPath: string,
-      branch: string,
-    ) => Promise<GitCheckoutResult>;
+    ) => Promise<{ path: string; branch?: string; isMain: boolean }[]>;
   };
   fs: {
     listDirs: (partial: string) => Promise<DirMatch[]>;

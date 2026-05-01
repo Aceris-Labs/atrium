@@ -1,10 +1,19 @@
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import type { AgentSessionInfo } from "../shared/types";
 import { TMUX_BIN } from "./launcher"; // used only by listAvailableSessions
+
+// Hook-driven status files: ~/.claude/workstream-status/<tmux-session>
+// Written by ~/bin/claude-status from Notification/UserPromptSubmit/Stop hooks.
+// Contents are literally "working", "idle", or "needs-input".
+const WORKSTREAM_STATUS_DIR = join(homedir(), ".claude", "workstream-status");
+// If the status file hasn't been touched in this long, the underlying claude
+// process likely crashed without firing Stop — degrade to "idle" to avoid
+// permanently sticky "working" indicators.
+const STATUS_FILE_STALE_MS = 30 * 60 * 1000;
 
 const execFileAsync = promisify(execFile);
 
@@ -130,12 +139,52 @@ async function readJsonlStatus(jsonlPath: string): Promise<AgentStatus> {
   }
 }
 
+/** Reads the hook-driven status file for a tmux session. Returns null if the
+ *  file doesn't exist (caller should fall back to JSONL inference). Returns
+ *  "idle" if the file is older than STATUS_FILE_STALE_MS to handle crashed
+ *  sessions that never fired Stop. */
+async function readHookStatus(
+  tmuxSession: string,
+): Promise<AgentStatus | null> {
+  const file = join(WORKSTREAM_STATUS_DIR, tmuxSession);
+  try {
+    const [text, info] = await Promise.all([
+      readFile(file, "utf-8"),
+      stat(file),
+    ]);
+    const trimmed = text.trim();
+    if (
+      trimmed !== "working" &&
+      trimmed !== "idle" &&
+      trimmed !== "needs-input"
+    ) {
+      return null;
+    }
+    if (
+      trimmed === "working" &&
+      Date.now() - info.mtimeMs > STATUS_FILE_STALE_MS
+    ) {
+      return "idle";
+    }
+    return trimmed as AgentStatus;
+  } catch {
+    return null;
+  }
+}
+
 export async function getAgentStatuses(
   sessions: Record<string, AgentSessionInfo | undefined>,
 ): Promise<Record<string, AgentStatus>> {
   const entries = Object.entries(sessions);
   const statuses = await Promise.all(
     entries.map(async ([, info]): Promise<AgentStatus> => {
+      // Prefer the hook-driven status file (fast, accurate, real-time).
+      if (info?.tmuxSession) {
+        const hook = await readHookStatus(info.tmuxSession);
+        if (hook !== null) return hook;
+      }
+      // Fall back to JSONL inference for sessions without a status file
+      // (e.g. claude run outside tmux).
       if (!info?.claudeSessionId || !info.directoryPath) return "no-session";
       const jsonlPath = join(
         claudeProjectDir(info.directoryPath),
@@ -146,6 +195,57 @@ export async function getAgentStatuses(
   );
 
   return Object.fromEntries(entries.map(([wsId], i) => [wsId, statuses[i]]));
+}
+
+export interface SessionRecap {
+  text: string;
+  timestamp: string;
+}
+
+/** Reads the most recent `away_summary` event from the session JSONL. These
+ *  are written by Claude itself periodically (the same recap shown in the
+ *  app/desktop). Returns null if no recap has been generated yet. */
+export async function getSessionRecap(
+  info: AgentSessionInfo | undefined,
+): Promise<SessionRecap | null> {
+  if (!info?.claudeSessionId || !info.directoryPath) return null;
+  const jsonlPath = join(
+    claudeProjectDir(info.directoryPath),
+    `${info.claudeSessionId}.jsonl`,
+  );
+  try {
+    const text = await readFile(jsonlPath, "utf-8");
+    const lines = text.split("\n");
+    // Walk backwards to find the most recent away_summary event.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      try {
+        const e = JSON.parse(line) as {
+          type?: string;
+          subtype?: string;
+          content?: string;
+          timestamp?: string;
+        };
+        if (
+          e.type === "system" &&
+          e.subtype === "away_summary" &&
+          typeof e.content === "string" &&
+          e.content.trim()
+        ) {
+          return {
+            text: e.content.trim(),
+            timestamp: e.timestamp ?? new Date().toISOString(),
+          };
+        }
+      } catch {
+        // skip malformed
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** List live tmux sessions for the session-picker UI. */

@@ -1,9 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { DirectoryField } from "./DirectoryField";
-import { PathInput } from "./PathInput";
+import { marked } from "marked";
+import {
+  PlayIcon,
+  StopIcon,
+  XMarkIcon,
+  ArrowPathIcon,
+  PlusIcon,
+  TrashIcon,
+} from "@heroicons/react/20/solid";
 import { PRCard, PRCardSkeleton } from "./PRCard";
+import { Checkbox } from "./Checkbox";
 import { LinkCard } from "./LinkCard";
 import { NotesSection } from "./NotesSection";
+import { CreateWorktreeModal } from "./CreateWorktreeModal";
 import type {
   PRStatus,
   Workspace,
@@ -16,16 +25,7 @@ import type {
   GitRepoInfo,
 } from "../../../shared/types";
 
-type Section =
-  | "summary"
-  | "prs"
-  | "notes"
-  | "todos"
-  | "documents"
-  | "tickets"
-  | "messaging"
-  | "other"
-  | "settings";
+type Tab = "overview" | "todos" | "notes" | "links" | "settings";
 
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -89,7 +89,6 @@ export function WorkspaceDetail({
   onUpdate,
   onDelete,
   onMove,
-  onBack,
   onRefreshSessions,
 }: Props) {
   const todos = workspace.todos ?? [];
@@ -107,7 +106,6 @@ export function WorkspaceDetail({
   const [prInput, setPrInput] = useState("");
   const [prInputError, setPrInputError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [showGearMenu, setShowGearMenu] = useState(false);
   const [fetchedPRs, setFetchedPRs] = useState<PRStatus[]>([]);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(workspace.title);
@@ -122,7 +120,6 @@ export function WorkspaceDetail({
   >([]);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
 
-  // Header inline-edit state
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [showTypePicker, setShowTypePicker] = useState(false);
   const [showBranchPicker, setShowBranchPicker] = useState(false);
@@ -130,43 +127,41 @@ export function WorkspaceDetail({
     isRepo: false,
   });
   const [branchDraft, setBranchDraft] = useState(workspace.branch ?? "");
-  const [checkingOutBranch, setCheckingOutBranch] = useState(false);
-  const [branchCheckoutError, setBranchCheckoutError] = useState("");
-  const [editingRepo, setEditingRepo] = useState(false);
-  const [repoDraft, setRepoDraft] = useState(workspace.repo ?? "");
-  const [editingDir, setEditingDir] = useState(false);
-  const [dirDraft, setDirDraft] = useState(workspace.directoryPath ?? "");
+  const [showCreateWorktree, setShowCreateWorktree] = useState(false);
+  const [confirmDeleteWorktree, setConfirmDeleteWorktree] = useState(false);
+  const [gitRemoveWorktree, setGitRemoveWorktree] = useState(false);
+  const [deletingWorktree, setDeletingWorktree] = useState(false);
+  const [deleteWorktreeError, setDeleteWorktreeError] = useState<string | null>(
+    null,
+  );
 
-  // Summary tab state
   const [aboutDraft, setAboutDraft] = useState(workspace.about ?? "");
   const [generatingDigest, setGeneratingDigest] = useState(false);
+  const [actualBranch, setActualBranch] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [draggingPRKey, setDraggingPRKey] = useState<string | null>(null);
+  const [prDropTarget, setPRDropTarget] = useState<{
+    key: string;
+    before: boolean;
+  } | null>(null);
+  const [recap, setRecap] = useState<{
+    text: string;
+    timestamp: string;
+  } | null>(null);
 
   const titleInputRef = useRef<HTMLInputElement>(null);
 
-  // Derived link groups
-  const docLinks = linkItems.filter((l) => l.category === "docs");
-  const ticketLinks = linkItems.filter((l) => l.category === "tickets");
-  const messagingLinks = linkItems.filter(
-    (l) => l.source === "slack" || l.source === "discord",
-  );
-  const otherLinks = linkItems.filter(
-    (l) =>
-      l.category === "other" && l.source !== "slack" && l.source !== "discord",
-  );
   const openTodos = todos.filter((t) => !t.done);
+  const ticketLinks = linkItems.filter((l) => l.category === "tickets");
 
-  const [activeSection, setActiveSection] = useState<Section>("summary");
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
 
-  const navItems: { id: Section; label: string; count?: number }[] = [
-    { id: "summary", label: "Summary" },
-    { id: "prs", label: "Pull Requests", count: workspace.prs.length },
+  const tabs: { id: Tab; label: string; count?: number }[] = [
+    { id: "overview", label: "Overview" },
     { id: "todos", label: "Todos", count: openTodos.length },
     { id: "notes", label: "Notes", count: noteItems.length },
-    { id: "documents", label: "Documents", count: docLinks.length },
-    { id: "tickets", label: "Tickets", count: ticketLinks.length },
-    { id: "messaging", label: "Messaging", count: messagingLinks.length },
-    { id: "other", label: "Other", count: otherLinks.length },
-    { id: "settings", label: "Settings", count: undefined },
+    { id: "links", label: "Links", count: linkItems.length },
+    { id: "settings", label: "Settings" },
   ];
 
   useEffect(() => {
@@ -174,8 +169,6 @@ export function WorkspaceDetail({
   }, [editingTitle]);
 
   useEffect(() => {
-    // Cache any linked PRs currently in prStatuses so they survive a
-    // temporary drop (e.g. transient fetchPR failure during sync).
     const fromStatuses = prStatuses.filter((pr) =>
       workspace.prs.some((p) => p.repo === pr.repo && p.number === pr.number),
     );
@@ -203,10 +196,9 @@ export function WorkspaceDetail({
       if (valid.length > 0) setFetchedPRs((prev) => [...prev, ...valid]);
     }
     fetchMissing();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id, workspace.prs, prStatuses]);
 
-  // Stable key: only re-run hydration when the actual URL set changes, not on
-  // every workspace save (which creates new array references even if unchanged).
   const linksKey = (workspace.links ?? []).map((l) => l.url).join("\0");
 
   useEffect(() => {
@@ -218,15 +210,11 @@ export function WorkspaceDetail({
     }
     let cancelled = false;
     async function run() {
-      // Phase 1: show stale cached data immediately — no shimmer for known URLs.
       const stale = await window.api.links.getCached(urls);
       if (!cancelled) {
         setLinkHydrations(stale);
-        // Shimmer only for URLs with no cache entry at all.
         setHydrationPending(new Set(urls.filter((u) => !stale[u])));
       }
-
-      // Phase 2: hydrate in background (skips fresh URLs, fetches stale/missing).
       try {
         const fresh = await window.api.links.hydrate(urls);
         if (!cancelled) {
@@ -251,14 +239,62 @@ export function WorkspaceDetail({
   }, [workspace.id]);
 
   useEffect(() => {
+    if (!workspace.claudeSessionId) {
+      setRecap(null);
+      return;
+    }
+    let cancelled = false;
+    const info = {
+      tmuxSession: workspace.tmuxSession,
+      directoryPath: workspace.worktree?.path ?? wing?.projectDir,
+      claudeSessionId: workspace.claudeSessionId,
+    };
+    async function load() {
+      const r = await window.api.agents.recap(info);
+      if (!cancelled) setRecap(r);
+    }
+    load();
+    const interval = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    workspace.id,
+    workspace.claudeSessionId,
+    workspace.tmuxSession,
+    workspace.worktree?.path,
+    wing?.projectDir,
+  ]);
+
+  const wing = allWings.find((w) => w.id === wingId);
+  const effectiveDir = workspace.worktree?.path ?? wing?.projectDir;
+
+  // Show the worktree's actual current HEAD (so the header reflects shell
+  // checkouts), not the saved workspace.branch field.
+  useEffect(() => {
+    if (!workspace.worktree?.path) {
+      setActualBranch(null);
+      return;
+    }
+    let cancelled = false;
+    window.api.git.currentBranch(workspace.worktree.path).then((b) => {
+      if (!cancelled) setActualBranch(b);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace.id, workspace.worktree?.path, workspace.branch]);
+
+  useEffect(() => {
     if (!showBranchPicker) return;
-    const path = workspace.directoryPath?.trim();
-    if (!path) {
+    if (!effectiveDir) {
       setBranchRepoInfo({ isRepo: false });
       return;
     }
-    window.api.git.detectRepo(path).then(setBranchRepoInfo);
-  }, [showBranchPicker, workspace.directoryPath]);
+    window.api.git.detectRepo(effectiveDir).then(setBranchRepoInfo);
+  }, [showBranchPicker, effectiveDir]);
 
   function handleSaveAbout() {
     if (aboutDraft !== (workspace.about ?? "")) {
@@ -305,44 +341,34 @@ export function WorkspaceDetail({
     setEditingTitle(false);
   }
 
-  async function commitBranchCheckout(next: string) {
+  function commitBranchCheckout(next: string) {
     if (!next || next === workspace.branch) {
       setShowBranchPicker(false);
-      setBranchCheckoutError("");
       return;
-    }
-    const path = workspace.directoryPath?.trim();
-    if (path && branchRepoInfo.isRepo) {
-      setCheckingOutBranch(true);
-      setBranchCheckoutError("");
-      const result = await window.api.git.checkoutBranch(path, next);
-      setCheckingOutBranch(false);
-      if (!result.ok) {
-        setBranchCheckoutError(result.error);
-        return;
-      }
     }
     onUpdate({ ...workspace, branch: next });
     setShowBranchPicker(false);
   }
 
-  function commitRepo() {
-    const trimmed = repoDraft.trim();
-    if (trimmed !== workspace.repo) {
-      onUpdate({ ...workspace, repo: trimmed || undefined });
+  async function handleDeleteWorktree() {
+    setDeletingWorktree(true);
+    setDeleteWorktreeError(null);
+    try {
+      const updated = await window.api.workspace.deleteWorktree(
+        wingId,
+        workspace.id,
+        gitRemoveWorktree,
+      );
+      onUpdate(updated);
+      setConfirmDeleteWorktree(false);
+      setGitRemoveWorktree(false);
+    } catch (e) {
+      setDeleteWorktreeError(
+        e instanceof Error ? e.message : "Failed to remove worktree",
+      );
+    } finally {
+      setDeletingWorktree(false);
     }
-    setEditingRepo(false);
-  }
-
-  async function commitDir() {
-    const trimmed = dirDraft.trim();
-    const update: Partial<Workspace> = { directoryPath: trimmed || undefined };
-    if (trimmed) {
-      const info = await window.api.git.detectRepo(trimmed);
-      if (info.isRepo && info.currentBranch) update.branch = info.currentBranch;
-    }
-    onUpdate({ ...workspace, ...update });
-    setEditingDir(false);
   }
 
   function handleAddTodo() {
@@ -479,6 +505,26 @@ export function WorkspaceDetail({
     }
   }
 
+  function handleReorderPR(
+    draggedKey: string,
+    targetKey: string,
+    insertBefore: boolean,
+  ) {
+    if (draggedKey === targetKey) return;
+    const ordered = [...workspace.prs];
+    const fromIdx = ordered.findIndex(
+      (p) => `${p.repo}-${p.number}` === draggedKey,
+    );
+    const toIdx = ordered.findIndex(
+      (p) => `${p.repo}-${p.number}` === targetKey,
+    );
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = ordered.splice(fromIdx, 1);
+    const adjustedTo = fromIdx < toIdx ? toIdx - 1 : toIdx;
+    ordered.splice(insertBefore ? adjustedTo : adjustedTo + 1, 0, moved);
+    onUpdate({ ...workspace, prs: ordered });
+  }
+
   function handleRemovePR(repo: string, num: number) {
     onUpdate({
       ...workspace,
@@ -487,12 +533,20 @@ export function WorkspaceDetail({
   }
 
   async function handleLaunch() {
-    const sessionName = await window.api.workspace.launch(wingId, workspace);
-    if (!workspace.tmuxSession) {
-      onUpdate({ ...workspace, tmuxSession: sessionName });
+    setLaunchError(null);
+    try {
+      const sessionName = await window.api.workspace.launch(wingId, workspace);
+      if (!workspace.tmuxSession) {
+        onUpdate({ ...workspace, tmuxSession: sessionName });
+      }
+      await onRefreshSessions();
+      if (workspace.worktree?.path) {
+        const b = await window.api.git.currentBranch(workspace.worktree.path);
+        setActualBranch(b);
+      }
+    } catch (e) {
+      setLaunchError(e instanceof Error ? e.message : "Launch failed");
     }
-    await onRefreshSessions();
-    onBack();
   }
 
   async function handleStop() {
@@ -508,30 +562,68 @@ export function WorkspaceDetail({
     },
     [],
   );
-  const linkedKeys = new Set(workspace.prs.map((p) => `${p.repo}-${p.number}`));
-  const linkedPRs = allKnownPRs.filter((pr) =>
-    linkedKeys.has(`${pr.repo ?? ""}-${pr.number}`),
-  );
+  const knownByKey = new Map<string, PRStatus>();
+  for (const pr of allKnownPRs) {
+    knownByKey.set(`${pr.repo ?? ""}-${pr.number}`, pr);
+  }
+  // Sort linkedPRs by workspace.prs order so reordering in the UI updates
+  // which one is "primary" on the workspace card.
+  const linkedPRs = workspace.prs
+    .map((p) => knownByKey.get(`${p.repo}-${p.number}`))
+    .filter((pr): pr is PRStatus => pr !== undefined);
   const tmuxRunning = workspace.tmuxSession
     ? tmuxSessions.includes(workspace.tmuxSession)
     : false;
 
   return (
-    <div className="detail-layout">
-      {/* ── Header ──────────────────────────────────────────────── */}
-      <div className="detail-header">
-        <div className="detail-header-main">
-          {/* Status dot picker */}
+    <div className="flex flex-col h-full">
+      {/* ── Single-row header ───────────────────────────────────── */}
+      <div className="border-b border-line px-7 py-5 flex items-center gap-3 flex-wrap shrink-0">
+        {/* Title */}
+        {editingTitle ? (
+          <input
+            ref={titleInputRef}
+            className="detail-title-input"
+            value={titleDraft}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") {
+                setTitleDraft(workspace.title);
+                setEditingTitle(false);
+              }
+            }}
+          />
+        ) : (
+          <h1
+            className="text-[20px] font-semibold text-fg cursor-pointer hover:text-fg"
+            onClick={() => {
+              setTitleDraft(workspace.title);
+              setEditingTitle(true);
+            }}
+            title="Click to rename"
+          >
+            {workspace.title}
+          </h1>
+        )}
+
+        {/* Metadata chips */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Status chip */}
           <div className="relative">
             <button
-              className="card-status-dot-btn"
+              className="meta-chip"
               onClick={() => setShowStatusPicker(!showStatusPicker)}
               title="Change status"
             >
-              <span
-                className={`card-status-dot ${workspace.status}`}
-                style={{ width: 10, height: 10 }}
-              />
+              <span className="meta-chip-label">status</span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  className={`status-dot status-${workspace.status}`}
+                />
+                <span className="text-fg">{workspace.status}</span>
+              </span>
             </button>
             {showStatusPicker && (
               <>
@@ -554,7 +646,7 @@ export function WorkspaceDetail({
                         }}
                       >
                         <span className="flex items-center gap-2">
-                          <span className={`card-status-dot ${s}`} />
+                          <span className={`status-dot status-${s}`} />
                           {s}
                         </span>
                       </button>
@@ -564,41 +656,24 @@ export function WorkspaceDetail({
               </>
             )}
           </div>
-          {editingTitle ? (
-            <input
-              ref={titleInputRef}
-              className="detail-title-input"
-              value={titleDraft}
-              onChange={(e) => setTitleDraft(e.target.value)}
-              onBlur={commitRename}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitRename();
-                if (e.key === "Escape") {
-                  setTitleDraft(workspace.title);
-                  setEditingTitle(false);
-                }
-              }}
-            />
-          ) : (
-            <h1
-              className="detail-title editable"
-              onClick={() => {
-                setTitleDraft(workspace.title);
-                setEditingTitle(true);
-              }}
-              title="Click to rename"
-            >
-              {workspace.title}
-            </h1>
-          )}
-          {/* Type badge picker */}
+
+          {/* Type chip */}
           <div className="relative">
             <button
-              className="card-type-badge-btn"
+              className="meta-chip"
               onClick={() => setShowTypePicker(!showTypePicker)}
               title="Change type"
             >
-              <span className={`card-type-badge ${workspace.type}`}>
+              <span className="meta-chip-label">type</span>
+              <span
+                className={
+                  workspace.type === "feature"
+                    ? "text-blue"
+                    : workspace.type === "research"
+                      ? "text-purple"
+                      : "text-red"
+                }
+              >
                 {workspace.type}
               </span>
             </button>
@@ -629,175 +704,49 @@ export function WorkspaceDetail({
             )}
           </div>
 
-          {/* Launch controls inline with title */}
-          <div className="flex items-center gap-2 ml-4">
-            <button className="btn btn-primary btn-sm" onClick={handleLaunch}>
-              Launch
-            </button>
-            {tmuxRunning && (
-              <button
-                className="btn btn-ghost btn-sm"
-                style={{ color: "var(--red)", borderColor: "var(--red)33" }}
-                onClick={handleStop}
-              >
-                Stop
-              </button>
-            )}
-            <div className="session-picker-wrapper">
-              <button
-                className="session-picker-trigger"
-                onClick={() => {
-                  setShowSessionPicker(!showSessionPicker);
-                  window.api.agents.sessions().then(setAvailableSessions);
-                }}
-              >
-                <div className={`tmux-dot ${tmuxRunning ? "running" : ""}`} />
-                {workspace.tmuxSession
-                  ? `tmux: ${workspace.tmuxSession}`
-                  : "Link session…"}
-              </button>
-              {showSessionPicker && (
-                <>
-                  <div
-                    className="gear-menu-backdrop"
-                    onClick={() => setShowSessionPicker(false)}
-                  />
-                  <div
-                    className="gear-menu"
-                    style={{ minWidth: 240, left: 0, right: "auto" }}
-                  >
-                    {availableSessions.map((s) => (
-                      <button
-                        key={s.name}
-                        className={`gear-menu-item${workspace.tmuxSession === s.name ? " selected" : ""}`}
-                        onClick={() => {
-                          onUpdate({ ...workspace, tmuxSession: s.name });
-                          setShowSessionPicker(false);
-                        }}
-                      >
-                        <span className="flex items-center gap-2">
-                          <span className={`agent-dot ${s.status}`} />
-                          {s.name}
-                          <span
-                            style={{
-                              marginLeft: "auto",
-                              fontSize: 10,
-                              color: "var(--text-muted)",
-                            }}
-                          >
-                            {s.status}
-                          </span>
-                        </span>
-                      </button>
-                    ))}
-                    {workspace.tmuxSession && (
-                      <button
-                        className="gear-menu-item"
-                        style={{ color: "var(--text-muted)" }}
-                        onClick={() => {
-                          onUpdate({ ...workspace, tmuxSession: undefined });
-                          setShowSessionPicker(false);
-                        }}
-                      >
-                        Unlink session
-                      </button>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-            {agentStatus !== "no-session" && (
-              <div className={`agent-badge ${agentStatus}`}>
-                <div className={`agent-dot ${agentStatus}`} />
-                {agentStatus === "working" && "claude working"}
-                {agentStatus === "needs-input" && "needs input"}
-                {agentStatus === "idle" && "claude idle"}
-              </div>
-            )}
-          </div>
-
-          <div className="gear-menu-wrapper" style={{ marginLeft: "auto" }}>
-            <button
-              className="gear-btn"
-              onClick={() => setShowGearMenu(!showGearMenu)}
-            >
-              ⚙
-            </button>
-            {showGearMenu && (
-              <>
-                <div
-                  className="gear-menu-backdrop"
-                  onClick={() => {
-                    setShowGearMenu(false);
-                    setConfirmDelete(false);
-                  }}
-                />
-                <div className="gear-menu">
-                  {!confirmDelete ? (
-                    <button
-                      className="gear-menu-item danger"
-                      onClick={() => setConfirmDelete(true)}
-                    >
-                      Delete workspace
-                    </button>
-                  ) : (
-                    <div className="gear-menu-confirm">
-                      <span>Delete this workspace?</span>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <button
-                          className="btn"
-                          style={{
-                            background: "var(--red)",
-                            borderColor: "var(--red)",
-                            color: "#fff",
-                            fontSize: 11,
-                            padding: "4px 10px",
-                          }}
-                          onClick={() => onDelete(workspace.id)}
-                        >
-                          Delete
-                        </button>
-                        <button
-                          className="btn btn-ghost"
-                          style={{ fontSize: 11, padding: "4px 10px" }}
-                          onClick={() => setConfirmDelete(false)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className="detail-header-meta">
-          {/* Branch — popover with real branch list or text input fallback */}
+          {/* Branch chip — actual HEAD when worktree present; saved focus otherwise */}
           <div className="relative">
             <button
-              className="detail-meta-item detail-meta-item-btn"
+              className="meta-chip"
               onClick={() => {
-                setBranchDraft(workspace.branch ?? "");
-                setBranchCheckoutError("");
+                setBranchDraft(workspace.branch ?? actualBranch ?? "");
                 setShowBranchPicker(!showBranchPicker);
               }}
-              title="Change branch"
+              title={
+                workspace.worktree
+                  ? actualBranch
+                    ? `Current HEAD in worktree (saved focus: ${workspace.branch ?? "—"})`
+                    : "No git HEAD detected"
+                  : "Change branch"
+              }
             >
-              <span className="detail-meta-label">branch</span>
-              <code className={workspace.branch ? "" : "text-fg-muted"}>
-                {workspace.branch ?? "+ branch"}
+              <span className="meta-chip-label">branch</span>
+              <code
+                className={
+                  actualBranch || workspace.branch
+                    ? "text-fg"
+                    : "text-fg-muted"
+                }
+              >
+                {actualBranch ?? workspace.branch ?? "—"}
               </code>
+              {workspace.worktree &&
+                actualBranch &&
+                workspace.branch &&
+                actualBranch !== workspace.branch && (
+                  <span
+                    className="text-xs text-yellow"
+                    title={`Diverged from saved focus '${workspace.branch}'. Launch will check out the saved branch.`}
+                  >
+                    ⚠
+                  </span>
+                )}
             </button>
             {showBranchPicker && (
               <>
                 <div
                   className="gear-menu-backdrop"
-                  onClick={() => {
-                    setShowBranchPicker(false);
-                    setBranchCheckoutError("");
-                  }}
+                  onClick={() => setShowBranchPicker(false)}
                 />
                 <div
                   className="gear-menu"
@@ -809,40 +758,17 @@ export function WorkspaceDetail({
                         <button
                           key={b}
                           className={`gear-menu-item${workspace.branch === b ? " selected" : ""}`}
-                          disabled={checkingOutBranch}
                           onClick={() => commitBranchCheckout(b)}
                         >
                           {b}
-                          {checkingOutBranch && workspace.branch !== b && (
-                            <span
-                              style={{
-                                marginLeft: "auto",
-                                fontSize: 10,
-                                color: "var(--text-muted)",
-                              }}
-                            >
-                              …
-                            </span>
-                          )}
                         </button>
                       ))}
-                      {branchCheckoutError && (
-                        <div
-                          className="gear-menu-item"
-                          style={{
-                            color: "var(--red)",
-                            cursor: "default",
-                            fontSize: 11,
-                          }}
-                        >
-                          {branchCheckoutError}
-                        </div>
-                      )}
                     </>
                   ) : (
                     <div className="px-2 py-2">
                       <input
                         className="detail-meta-edit-input w-full"
+                        // eslint-disable-next-line jsx-a11y/no-autofocus
                         autoFocus
                         value={branchDraft}
                         onChange={(e) => setBranchDraft(e.target.value)}
@@ -860,114 +786,348 @@ export function WorkspaceDetail({
             )}
           </div>
 
-          {/* Repo — inline text input */}
-          <span className="detail-meta-item">
-            <span className="detail-meta-label">repo</span>
-            {editingRepo ? (
-              <input
-                className="detail-meta-edit-input"
-                autoFocus
-                value={repoDraft}
-                onChange={(e) => setRepoDraft(e.target.value)}
-                placeholder="owner/repo"
-                onBlur={commitRepo}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitRepo();
-                  if (e.key === "Escape") {
-                    setRepoDraft(workspace.repo ?? "");
-                    setEditingRepo(false);
-                  }
-                }}
-              />
-            ) : (
-              <button
-                className="detail-meta-value-btn"
-                onClick={() => {
-                  setRepoDraft(workspace.repo ?? "");
-                  setEditingRepo(true);
-                }}
-                title="Edit repo"
-              >
-                <code className={workspace.repo ? "" : "text-fg-muted"}>
-                  {workspace.repo ?? "+ repo"}
-                </code>
-              </button>
-            )}
-          </span>
-
-          {/* Directory — PathInput inline */}
-          <span
-            className="detail-meta-item"
-            style={{ flex: editingDir ? 1 : undefined }}
-          >
-            <span className="detail-meta-label">dir</span>
-            {editingDir ? (
-              <PathInput
-                value={dirDraft}
-                onChange={setDirDraft}
-                placeholder="~/personal-projects/myproject"
-                autoFocus
-                onSubmit={commitDir}
-                className="detail-meta-edit-input"
-              />
-            ) : (
-              <button
-                className="detail-meta-value-btn"
-                onClick={() => {
-                  setDirDraft(workspace.directoryPath ?? "");
-                  setEditingDir(true);
-                }}
-                title="Edit directory"
-              >
-                <code
-                  className={workspace.directoryPath ? "" : "text-fg-muted"}
+          {/* Worktree chip — shown when one exists; otherwise an Add button */}
+          {workspace.worktree ? (
+            confirmDeleteWorktree ? (
+              <span className="flex items-center gap-2">
+                <label className="flex items-center gap-1 text-xs text-fg-muted cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={gitRemoveWorktree}
+                    onChange={(e) => setGitRemoveWorktree(e.target.checked)}
+                    style={{ width: 11, height: 11 }}
+                  />
+                  git remove
+                </label>
+                <button
+                  className="btn btn-sm"
+                  style={{
+                    background: "var(--red)",
+                    borderColor: "var(--red)",
+                    color: "#fff",
+                    fontSize: 11,
+                    padding: "2px 8px",
+                  }}
+                  onClick={handleDeleteWorktree}
+                  disabled={deletingWorktree}
                 >
-                  {workspace.directoryPath
-                    ? workspace.directoryPath.replace(/^\/Users\/[^/]+/, "~")
-                    : "+ directory"}
-                </code>
-              </button>
+                  {deletingWorktree ? "…" : "Remove"}
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: 11, padding: "2px 8px" }}
+                  onClick={() => {
+                    setConfirmDeleteWorktree(false);
+                    setDeleteWorktreeError(null);
+                    setGitRemoveWorktree(false);
+                  }}
+                >
+                  Cancel
+                </button>
+                {deleteWorktreeError && (
+                  <span className="text-xs" style={{ color: "var(--red)" }}>
+                    {deleteWorktreeError}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <div className="meta-chip" title={workspace.worktree.path}>
+                <span className="meta-chip-label">worktree</span>
+                <code className="text-fg">{workspace.worktree.name}</code>
+                <button
+                  className="text-fg-muted hover:text-red w-4 h-4 flex items-center justify-center rounded -mr-1"
+                  onClick={() => setConfirmDeleteWorktree(true)}
+                  title="Remove worktree"
+                >
+                  <XMarkIcon className="w-3 h-3" />
+                </button>
+              </div>
+            )
+          ) : (
+            <WorktreePickerButton
+              wingId={wingId}
+              workspace={workspace}
+              projectDir={wing?.projectDir}
+              onPicked={onUpdate}
+              onCreateNew={() => setShowCreateWorktree(true)}
+            />
+          )}
+        </div>
+
+        {/* Right cluster: launch / session / agent / gear */}
+        <div className="ml-auto flex items-center gap-2">
+          {agentStatus !== "no-session" && (
+            <div className={`agent-badge ${agentStatus}`}>
+              <div className={`agent-dot ${agentStatus}`} />
+              {agentStatus === "working" && "claude working"}
+              {agentStatus === "needs-input" && "needs input"}
+              {agentStatus === "idle" && "claude idle"}
+            </div>
+          )}
+
+          <div className="session-picker-wrapper">
+            <button
+              className="session-picker-trigger"
+              onClick={() => {
+                setShowSessionPicker(!showSessionPicker);
+                window.api.agents.sessions().then(setAvailableSessions);
+              }}
+            >
+              <div className={`tmux-dot ${tmuxRunning ? "running" : ""}`} />
+              {workspace.tmuxSession
+                ? `tmux: ${workspace.tmuxSession}`
+                : "Link session…"}
+            </button>
+            {showSessionPicker && (
+              <>
+                <div
+                  className="gear-menu-backdrop"
+                  onClick={() => setShowSessionPicker(false)}
+                />
+                <div
+                  className="gear-menu"
+                  style={{ minWidth: 240, right: 0, left: "auto" }}
+                >
+                  {availableSessions.map((s) => (
+                    <button
+                      key={s.name}
+                      className={`gear-menu-item${workspace.tmuxSession === s.name ? " selected" : ""}`}
+                      onClick={() => {
+                        onUpdate({ ...workspace, tmuxSession: s.name });
+                        setShowSessionPicker(false);
+                      }}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className={`agent-dot ${s.status}`} />
+                        {s.name}
+                        <span
+                          style={{
+                            marginLeft: "auto",
+                            fontSize: 10,
+                            color: "var(--text-muted)",
+                          }}
+                        >
+                          {s.status}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                  {workspace.tmuxSession && (
+                    <button
+                      className="gear-menu-item"
+                      style={{ color: "var(--text-muted)" }}
+                      onClick={() => {
+                        onUpdate({ ...workspace, tmuxSession: undefined });
+                        setShowSessionPicker(false);
+                      }}
+                    >
+                      Unlink session
+                    </button>
+                  )}
+                </div>
+              </>
             )}
-          </span>
+          </div>
+
+          <button
+            className="btn btn-primary btn-sm flex items-center gap-1"
+            onClick={handleLaunch}
+            title={launchError ?? "Launch this space"}
+          >
+            <PlayIcon className="w-3.5 h-3.5" />
+            Launch
+          </button>
+          {launchError && (
+            <span
+              className="text-xs text-red max-w-[280px] truncate"
+              title={launchError}
+            >
+              {launchError}
+            </span>
+          )}
+          {tmuxRunning && (
+            <button
+              className="btn btn-ghost btn-sm flex items-center gap-1"
+              style={{ color: "var(--red)", borderColor: "var(--red)33" }}
+              onClick={handleStop}
+              title="Stop session"
+            >
+              <StopIcon className="w-3.5 h-3.5" />
+              Stop
+            </button>
+          )}
+
         </div>
       </div>
 
-      {/* ── Body: nav + content ─────────────────────────────────── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Left nav */}
-        <nav className="w-[160px] flex-shrink-0 flex flex-col border-r border-line py-3 px-2 overflow-y-auto gap-px">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setActiveSection(item.id)}
-              className={`flex items-center justify-between w-full px-3 py-[6px] rounded-sm text-sm text-left cursor-pointer border-none bg-transparent ${
-                activeSection === item.id
-                  ? "bg-bg-input text-fg font-medium"
-                  : "text-fg-muted hover:text-fg hover:bg-bg-card-hover"
-              }`}
-            >
-              <span>{item.label}</span>
-              {item.count !== undefined && item.count > 0 && (
-                <span className="text-xs text-fg-muted tabular-nums">
-                  {item.count}
-                </span>
-              )}
-            </button>
-          ))}
-        </nav>
+      {/* ── Horizontal tabs ─────────────────────────────────────── */}
+      <div className="flex border-b border-line bg-bg shrink-0 px-7">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            className={`px-5 py-4 text-sm font-bold uppercase tracking-[0.08em] border-b-[3px] -mb-px transition-colors flex items-center gap-2 ${
+              activeTab === tab.id
+                ? "text-fg border-blue"
+                : "text-fg-muted border-transparent hover:text-fg"
+            }`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            <span>{tab.label}</span>
+            {tab.count !== undefined && tab.count > 0 && (
+              <span className="text-xs text-fg-muted bg-bg-input border border-line rounded-[10px] px-[7px] py-px tabular-nums">
+                {tab.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
 
-        {/* Section content */}
-        <div className="flex-1 overflow-y-auto px-7 py-6 flex flex-col gap-6">
-          {/* ── Summary ── */}
-          {activeSection === "summary" && (
+      {/* ── Tab content ─────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-[1800px] mx-auto px-7 py-6">
+          {activeTab === "overview" && (
             <div className="flex flex-col gap-8">
+              {/* PRs */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-base font-bold text-fg-muted uppercase tracking-[0.08em]">
+                    Pull Requests
+                  </span>
+                  {workspace.prs.length > 0 && (
+                    <span className="section-count">
+                      {workspace.prs.length}
+                    </span>
+                  )}
+                  <div className="ml-auto flex items-center gap-2">
+                    <input
+                      className="form-input form-input-sm"
+                      value={prInput}
+                      onChange={(e) => {
+                        setPrInput(e.target.value);
+                        setPrInputError("");
+                      }}
+                      onKeyDown={(e) => e.key === "Enter" && handleAddPR()}
+                      placeholder="PR # or URL"
+                    />
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleAddPR}
+                    >
+                      Link PR
+                    </button>
+                    {prInputError && (
+                      <span className="pr-input-error">{prInputError}</span>
+                    )}
+                  </div>
+                </div>
+                {workspace.prs.length > 0 ? (
+                  <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))] auto-rows-fr">
+                    {linkedPRs.map((pr) => {
+                      const key = `${pr.repo ?? ""}-${pr.number}`;
+                      const isDragOver =
+                        draggingPRKey !== null &&
+                        draggingPRKey !== key &&
+                        prDropTarget?.key === key;
+                      return (
+                        <div
+                          key={key}
+                          className="detail-pr-card-wrapper relative"
+                          draggable
+                          onDragStart={() => setDraggingPRKey(key)}
+                          onDragEnd={() => {
+                            setDraggingPRKey(null);
+                            setPRDropTarget(null);
+                          }}
+                          onDragOver={(e) => {
+                            if (
+                              !draggingPRKey ||
+                              draggingPRKey === key
+                            )
+                              return;
+                            e.preventDefault();
+                            const rect =
+                              e.currentTarget.getBoundingClientRect();
+                            const before =
+                              e.clientX < rect.left + rect.width / 2;
+                            setPRDropTarget({ key, before });
+                          }}
+                          onDrop={(e) => {
+                            if (!draggingPRKey || draggingPRKey === key)
+                              return;
+                            e.preventDefault();
+                            handleReorderPR(
+                              draggingPRKey,
+                              key,
+                              prDropTarget?.before ?? true,
+                            );
+                            setDraggingPRKey(null);
+                            setPRDropTarget(null);
+                          }}
+                          style={{
+                            opacity: draggingPRKey === key ? 0.4 : 1,
+                          }}
+                        >
+                          {isDragOver && prDropTarget?.before && (
+                            <div className="absolute -left-1.5 top-0 bottom-0 w-0.5 bg-blue rounded-full" />
+                          )}
+                          {isDragOver && !prDropTarget?.before && (
+                            <div className="absolute -right-1.5 top-0 bottom-0 w-0.5 bg-blue rounded-full" />
+                          )}
+                          <PRCard
+                            pr={pr}
+                            tag={prTag(
+                              pr.number,
+                              reviewPRNumbers,
+                              watchedPRNumbers,
+                              myPRNumbers,
+                            )}
+                            onClick={() =>
+                              window.api.shell.openExternal(pr.url)
+                            }
+                          />
+                          <button
+                            className="detail-pr-remove-overlay"
+                            onClick={() =>
+                              handleRemovePR(pr.repo ?? "", pr.number)
+                            }
+                            title="Unlink PR"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {workspace.prs
+                      .filter(
+                        (p) =>
+                          !linkedPRs.find(
+                            (k) => k.repo === p.repo && k.number === p.number,
+                          ),
+                      )
+                      .map((p) => (
+                        <div
+                          key={`${p.repo}-${p.number}`}
+                          className="detail-pr-card-wrapper"
+                        >
+                          <PRCardSkeleton number={p.number} repo={p.repo} />
+                          <button
+                            className="detail-pr-remove-overlay"
+                            onClick={() => handleRemovePR(p.repo, p.number)}
+                            title="Unlink PR"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <p className="detail-empty-text">No PRs linked yet.</p>
+                )}
+              </div>
+
               {/* Status snapshot */}
-              {(workspace.prs.length > 0 ||
-                todos.length > 0 ||
-                ticketLinks.length > 0) && (
+              {(todos.length > 0 || ticketLinks.length > 0) && (
                 <div className="rounded-md border border-line divide-y divide-line">
-                  {/* Todos row */}
                   {todos.length > 0 && (
                     <div className="flex items-center gap-3 px-4 py-3">
                       <span className="text-xs text-fg-muted w-14 shrink-0">
@@ -987,82 +1147,6 @@ export function WorkspaceDetail({
                     </div>
                   )}
 
-                  {/* PRs rows */}
-                  {workspace.prs.length > 0 && (
-                    <div className="flex flex-col gap-2 px-4 py-3">
-                      <span className="text-xs text-fg-muted">
-                        Pull Requests
-                      </span>
-                      {linkedPRs.map((pr) => (
-                        <div
-                          key={`${pr.repo ?? ""}-${pr.number}`}
-                          className="flex items-center gap-2 min-w-0"
-                        >
-                          <span className="text-xs text-fg-muted tabular-nums shrink-0">
-                            #{pr.number}
-                          </span>
-                          <span className="text-xs text-fg truncate flex-1">
-                            {pr.title}
-                          </span>
-                          <div className="flex items-center gap-1 shrink-0">
-                            {pr.state === "merged" && (
-                              <span className="badge merged">merged</span>
-                            )}
-                            {pr.state === "closed" && (
-                              <span className="badge closed">closed</span>
-                            )}
-                            {pr.state === "open" && pr.isDraft && (
-                              <span className="badge draft">draft</span>
-                            )}
-                            {pr.state === "open" && (
-                              <span className={`badge ci-${pr.ciStatus}`}>
-                                CI
-                              </span>
-                            )}
-                            {pr.state === "open" &&
-                              pr.reviewDecision === "APPROVED" && (
-                                <span className="badge review-approved">
-                                  approved
-                                </span>
-                              )}
-                            {pr.state === "open" &&
-                              pr.reviewDecision === "CHANGES_REQUESTED" && (
-                                <span className="badge review-changes-requested">
-                                  changes
-                                </span>
-                              )}
-                            {pr.state === "open" &&
-                              pr.reviewDecision === "REVIEW_REQUIRED" && (
-                                <span className="badge review-required">
-                                  review
-                                </span>
-                              )}
-                          </div>
-                        </div>
-                      ))}
-                      {workspace.prs
-                        .filter(
-                          (p) =>
-                            !linkedPRs.find(
-                              (lp) =>
-                                lp.repo === p.repo && lp.number === p.number,
-                            ),
-                        )
-                        .map((p) => (
-                          <div
-                            key={`${p.repo}-${p.number}`}
-                            className="flex items-center gap-2"
-                          >
-                            <span className="text-xs text-fg-muted tabular-nums shrink-0">
-                              #{p.number}
-                            </span>
-                            <span className="shimmer-bar flex-1" />
-                          </div>
-                        ))}
-                    </div>
-                  )}
-
-                  {/* Tickets rows */}
                   {ticketLinks.length > 0 && (
                     <div className="flex flex-col gap-2 px-4 py-3">
                       <span className="text-xs text-fg-muted">Tickets</span>
@@ -1104,9 +1188,38 @@ export function WorkspaceDetail({
                 </div>
               )}
 
-              {/* About — user-owned */}
+              {/* Latest recap (Claude's own session summary) */}
+              {recap && (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className="text-base font-bold text-fg-muted uppercase tracking-[0.08em]">
+                      Latest recap
+                    </span>
+                    <span className="text-xs text-fg-muted">
+                      {formatRelative(recap.timestamp)} · from Claude
+                    </span>
+                    <button
+                      className="btn btn-ghost btn-sm ml-auto"
+                      onClick={() => {
+                        setAboutDraft(recap.text);
+                        onUpdate({ ...workspace, about: recap.text });
+                      }}
+                      title="Replace About with this recap"
+                    >
+                      Use as About
+                    </button>
+                  </div>
+                  <div className="rounded-md border border-line bg-bg-input px-4 py-3 text-sm text-fg leading-relaxed">
+                    {recap.text}
+                  </div>
+                </div>
+              )}
+
+              {/* About */}
               <div className="flex flex-col gap-3">
-                <span className="detail-section-title">About</span>
+                <span className="text-base font-bold text-fg-muted uppercase tracking-[0.08em]">
+                  About
+                </span>
                 <textarea
                   className="w-full bg-bg-input border border-line rounded-md text-sm text-fg placeholder:text-fg-muted px-3 py-2.5 resize-none leading-relaxed outline-none focus:border-line-hover"
                   rows={5}
@@ -1117,10 +1230,12 @@ export function WorkspaceDetail({
                 />
               </div>
 
-              {/* Agent digest — AI-generated */}
+              {/* Agent digest */}
               <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-3">
-                  <span className="detail-section-title">Agent Digest</span>
+                  <span className="text-base font-bold text-fg-muted uppercase tracking-[0.08em]">
+                    Agent Digest
+                  </span>
                   <div className="flex-1" />
                   {workspace.digest?.generatedAt && !generatingDigest && (
                     <span className="text-xs text-fg-muted">
@@ -1132,12 +1247,9 @@ export function WorkspaceDetail({
                     onClick={handleGenerateDigest}
                     disabled={generatingDigest}
                   >
-                    {generatingDigest && (
-                      <div
-                        className="spinner shrink-0"
-                        style={{ width: 10, height: 10, borderWidth: 1.5 }}
-                      />
-                    )}
+                    <ArrowPathIcon
+                      className={`w-3.5 h-3.5 ${generatingDigest ? "animate-spin" : ""}`}
+                    />
                     {generatingDigest
                       ? "Generating…"
                       : workspace.digest
@@ -1153,9 +1265,12 @@ export function WorkspaceDetail({
                     <span className="shimmer-bar w-3/5 block" />
                   </div>
                 ) : workspace.digest?.text ? (
-                  <div className="text-sm text-fg leading-relaxed whitespace-pre-wrap rounded-md border border-line bg-bg-input px-4 py-3">
-                    {workspace.digest.text}
-                  </div>
+                  <div
+                    className="prose-note text-sm text-fg leading-relaxed rounded-md border border-line bg-bg-input px-4 py-3"
+                    dangerouslySetInnerHTML={{
+                      __html: marked.parse(workspace.digest.text) as string,
+                    }}
+                  />
                 ) : (
                   <p className="detail-empty-text">
                     Click Generate to have Claude summarize this space's PRs,
@@ -1166,97 +1281,8 @@ export function WorkspaceDetail({
             </div>
           )}
 
-          {/* ── PRs ── */}
-          {activeSection === "prs" && (
+          {activeTab === "todos" && (
             <div>
-              <div className="section-header">
-                <span className="detail-section-title">Pull Requests</span>
-                <div className="section-header-right">
-                  <input
-                    className="form-input form-input-sm"
-                    value={prInput}
-                    onChange={(e) => {
-                      setPrInput(e.target.value);
-                      setPrInputError("");
-                    }}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddPR()}
-                    placeholder="PR # or URL"
-                  />
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={handleAddPR}
-                  >
-                    Link PR
-                  </button>
-                  {prInputError && (
-                    <span className="pr-input-error">{prInputError}</span>
-                  )}
-                </div>
-              </div>
-              {workspace.prs.length > 0 ? (
-                <div className="detail-pr-grid">
-                  {linkedPRs.map((pr) => (
-                    <div
-                      key={`${pr.repo ?? ""}-${pr.number}`}
-                      className="detail-pr-card-wrapper"
-                    >
-                      <PRCard
-                        pr={pr}
-                        tag={prTag(
-                          pr.number,
-                          reviewPRNumbers,
-                          watchedPRNumbers,
-                          myPRNumbers,
-                        )}
-                        onClick={() => window.api.shell.openExternal(pr.url)}
-                      />
-                      <button
-                        className="detail-pr-remove-overlay"
-                        onClick={() => handleRemovePR(pr.repo ?? "", pr.number)}
-                        title="Unlink PR"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  {workspace.prs
-                    .filter(
-                      (p) =>
-                        !linkedPRs.find(
-                          (k) => k.repo === p.repo && k.number === p.number,
-                        ),
-                    )
-                    .map((p) => (
-                      <div
-                        key={`${p.repo}-${p.number}`}
-                        className="detail-pr-card-wrapper"
-                      >
-                        <PRCardSkeleton number={p.number} repo={p.repo} />
-                        <button
-                          className="detail-pr-remove-overlay"
-                          onClick={() => handleRemovePR(p.repo, p.number)}
-                          title="Unlink PR"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                </div>
-              ) : (
-                <p className="detail-empty-text">No PRs linked yet.</p>
-              )}
-            </div>
-          )}
-
-          {/* ── Todos ── */}
-          {activeSection === "todos" && (
-            <div>
-              <div
-                className="detail-section-title"
-                style={{ marginBottom: 12 }}
-              >
-                Todos
-              </div>
               <div className="todo-input-row">
                 <input
                   className="todo-input"
@@ -1290,15 +1316,14 @@ export function WorkspaceDetail({
                         setDragOverTodoId(null);
                       }}
                     >
-                      <input
-                        type="checkbox"
-                        className="todo-checkbox"
+                      <Checkbox
                         checked={false}
                         onChange={() => handleToggleTodo(todo.id)}
                       />
                       {editingTodoId === todo.id ? (
                         <input
                           className="todo-edit-input"
+                          // eslint-disable-next-line jsx-a11y/no-autofocus
                           autoFocus
                           value={editingTodoText}
                           onChange={(e) => setEditingTodoText(e.target.value)}
@@ -1342,9 +1367,7 @@ export function WorkspaceDetail({
                   .filter((t) => t.done)
                   .map((todo) => (
                     <div key={todo.id} className="todo-item done">
-                      <input
-                        type="checkbox"
-                        className="todo-checkbox"
+                      <Checkbox
                         checked={true}
                         onChange={() => handleToggleTodo(todo.id)}
                       />
@@ -1361,43 +1384,16 @@ export function WorkspaceDetail({
             </div>
           )}
 
-          {/* ── Notes ── */}
-          {activeSection === "notes" && (
-            <div>
-              <div className="section-header">
-                <span className="detail-section-title">Notes</span>
-              </div>
-              <NotesSection
-                notes={noteItems}
-                onChange={(notes) => onUpdate({ ...workspace, notes })}
-              />
-            </div>
+          {activeTab === "notes" && (
+            <NotesSection
+              notes={noteItems}
+              onChange={(notes) => onUpdate({ ...workspace, notes })}
+            />
           )}
 
-          {/* ── Link sections (Documents / Tickets / Messaging / Other) ── */}
-          {(activeSection === "documents" ||
-            activeSection === "tickets" ||
-            activeSection === "messaging" ||
-            activeSection === "other") && (
-            <LinkSection
-              label={
-                activeSection === "documents"
-                  ? "Documents"
-                  : activeSection === "tickets"
-                    ? "Tickets"
-                    : activeSection === "messaging"
-                      ? "Messaging"
-                      : "Other"
-              }
-              items={
-                activeSection === "documents"
-                  ? docLinks
-                  : activeSection === "tickets"
-                    ? ticketLinks
-                    : activeSection === "messaging"
-                      ? messagingLinks
-                      : otherLinks
-              }
+          {activeTab === "links" && (
+            <LinksTab
+              links={linkItems}
               linkInput={linkInput}
               onLinkInputChange={setLinkInput}
               onAddLink={handleAddLink}
@@ -1408,16 +1404,9 @@ export function WorkspaceDetail({
             />
           )}
 
-          {/* ── Settings ── */}
-          {activeSection === "settings" && (
-            <div>
-              <div
-                className="detail-section-title"
-                style={{ marginBottom: 16 }}
-              >
-                Settings
-              </div>
-              <div className="detail-config-grid">
+          {activeTab === "settings" && (
+            <div className="max-w-[600px] flex flex-col gap-7">
+              <div className="grid grid-cols-2 gap-4">
                 <div className="detail-field-group">
                   <label className="form-label">Status</label>
                   <select
@@ -1452,23 +1441,8 @@ export function WorkspaceDetail({
                   </select>
                 </div>
               </div>
-              <div className="detail-field-group" style={{ marginTop: 10 }}>
-                <label className="form-label">Directory</label>
-                <DirectoryField
-                  directoryPath={workspace.directoryPath}
-                  branch={workspace.branch}
-                  onChange={(next) => {
-                    const update: Partial<Workspace> = {};
-                    if ("directoryPath" in next)
-                      update.directoryPath = next.directoryPath;
-                    if ("branch" in next) update.branch = next.branch;
-                    if (Object.keys(update).length > 0)
-                      handleFieldUpdate(update);
-                  }}
-                />
-              </div>
               {allWings.length > 1 && (
-                <div className="detail-field-group" style={{ marginTop: 10 }}>
+                <div className="detail-field-group">
                   <label className="form-label">Move to wing</label>
                   <select
                     className="form-select"
@@ -1488,19 +1462,79 @@ export function WorkspaceDetail({
                   </select>
                 </div>
               )}
+
+              <div className="border border-line-danger rounded-md p-4 flex flex-col gap-3">
+                <div>
+                  <div className="text-sm font-bold text-red uppercase tracking-[0.08em]">
+                    Danger zone
+                  </div>
+                  <p className="text-xs text-fg-muted mt-1">
+                    Deleting a space removes its notes, todos, and links from
+                    Atrium. The worktree and any branches stay on disk.
+                  </p>
+                </div>
+                {!confirmDelete ? (
+                  <button
+                    className="btn btn-ghost btn-sm self-start flex items-center gap-2"
+                    style={{
+                      color: "var(--red)",
+                      borderColor: "var(--red)44",
+                    }}
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    <TrashIcon className="w-4 h-4" />
+                    Delete workspace
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-fg">
+                      Delete "{workspace.title}"?
+                    </span>
+                    <button
+                      className="btn btn-sm"
+                      style={{
+                        background: "var(--red)",
+                        borderColor: "var(--red)",
+                        color: "#fff",
+                      }}
+                      onClick={() => onDelete(workspace.id)}
+                    >
+                      Delete
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setConfirmDelete(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
       </div>
+
+      {showCreateWorktree && wing?.projectDir && (
+        <CreateWorktreeModal
+          wingId={wingId}
+          workspace={workspace}
+          projectDir={wing.projectDir}
+          onCreated={(updated) => {
+            onUpdate(updated);
+            setShowCreateWorktree(false);
+          }}
+          onClose={() => setShowCreateWorktree(false)}
+        />
+      )}
     </div>
   );
 }
 
-// ── Link section (shared by Documents / Tickets / Messaging / Other) ───────────
+// ── Links tab — flat list grouped by category ──────────────────────────────
 
-interface LinkSectionProps {
-  label: string;
-  items: WorkspaceLink[];
+interface LinksTabProps {
+  links: WorkspaceLink[];
   linkInput: string;
   onLinkInputChange: (v: string) => void;
   onAddLink: () => void;
@@ -1510,9 +1544,22 @@ interface LinkSectionProps {
   onDelete: (id: string) => void;
 }
 
-function LinkSection({
-  label,
-  items,
+const LINK_GROUP_LABELS: Record<string, string> = {
+  docs: "Documents",
+  tickets: "Tickets",
+  messaging: "Messaging",
+  other: "Other",
+};
+
+function groupKey(link: WorkspaceLink): keyof typeof LINK_GROUP_LABELS {
+  if (link.source === "slack" || link.source === "discord") return "messaging";
+  if (link.category === "docs") return "docs";
+  if (link.category === "tickets") return "tickets";
+  return "other";
+}
+
+function LinksTab({
+  links,
   linkInput,
   onLinkInputChange,
   onAddLink,
@@ -1520,49 +1567,209 @@ function LinkSection({
   hydrations,
   hydrationPending,
   onDelete,
-}: LinkSectionProps) {
+}: LinksTabProps) {
+  const grouped: Record<string, WorkspaceLink[]> = {
+    docs: [],
+    tickets: [],
+    messaging: [],
+    other: [],
+  };
+  for (const link of links) {
+    grouped[groupKey(link)].push(link);
+  }
+  const groupOrder = ["docs", "tickets", "messaging", "other"] as const;
+  const populatedGroups = groupOrder.filter((g) => grouped[g].length > 0);
+
   return (
-    <div>
-      <div className="section-header">
-        <span className="detail-section-title">{label}</span>
-        <div className="section-header-right">
-          {items.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={onRefresh}
-              title="Refresh link metadata"
-            >
-              ↻
-            </button>
-          )}
-          <input
-            className="form-input form-input-sm"
-            value={linkInput}
-            onChange={(e) => onLinkInputChange(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && onAddLink()}
-            placeholder="Paste a URL…"
-          />
-        </div>
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center gap-2">
+        <input
+          className="form-input form-input-sm flex-1 max-w-[500px]"
+          value={linkInput}
+          onChange={(e) => onLinkInputChange(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && onAddLink()}
+          placeholder="Paste a URL — Notion, Linear, GitHub, Slack, Figma…"
+        />
+        <button
+          className="btn btn-primary btn-sm flex items-center gap-1"
+          onClick={onAddLink}
+          disabled={!linkInput.trim()}
+        >
+          <PlusIcon className="w-3.5 h-3.5" />
+          Add
+        </button>
+        {links.length > 0 && (
+          <button
+            className="btn btn-ghost btn-sm flex items-center gap-1 ml-auto"
+            onClick={onRefresh}
+            title="Refresh link metadata"
+          >
+            <ArrowPathIcon className="w-3.5 h-3.5" />
+            Refresh
+          </button>
+        )}
       </div>
-      {items.length > 0 ? (
-        <div className="link-list">
-          {items.map((link) => (
-            <LinkCard
-              key={link.id}
-              link={link}
-              hydration={hydrations[link.url]}
-              isLoading={
-                hydrationPending.has(link.url) && !hydrations[link.url]
-              }
-              onDelete={() => onDelete(link.id)}
-            />
-          ))}
-        </div>
+
+      {links.length === 0 ? (
+        <p className="detail-empty-text">No links yet. Paste a URL above.</p>
       ) : (
-        <p className="detail-empty-text">
-          No {label.toLowerCase()} linked yet.
-        </p>
+        populatedGroups.map((group) => (
+          <div key={group} className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-base font-bold text-fg-muted uppercase tracking-[0.08em]">
+                {LINK_GROUP_LABELS[group]}
+              </span>
+              <span className="section-count">{grouped[group].length}</span>
+            </div>
+            <div className="link-list">
+              {grouped[group].map((link) => (
+                <LinkCard
+                  key={link.id}
+                  link={link}
+                  hydration={hydrations[link.url]}
+                  isLoading={
+                    hydrationPending.has(link.url) && !hydrations[link.url]
+                  }
+                  onDelete={() => onDelete(link.id)}
+                />
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ── Worktree picker (dropdown of existing + create-new footer) ─────────────
+
+function basenameOf(p: string): string {
+  return p.replace(/\/$/, "").split("/").pop() ?? p;
+}
+
+interface WorktreePickerButtonProps {
+  wingId: string;
+  workspace: Workspace;
+  projectDir?: string;
+  onPicked: (updated: Workspace) => void;
+  onCreateNew: () => void;
+}
+
+function WorktreePickerButton({
+  wingId,
+  workspace,
+  projectDir,
+  onPicked,
+  onCreateNew,
+}: WorktreePickerButtonProps) {
+  const [open, setOpen] = useState(false);
+  const [worktrees, setWorktrees] = useState<
+    { path: string; branch?: string; isMain: boolean }[]
+  >([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !projectDir) return;
+    let cancelled = false;
+    setLoading(true);
+    window.api.git
+      .listWorktrees(projectDir)
+      .then((wts) => {
+        if (cancelled) return;
+        setWorktrees(wts.filter((w) => !w.isMain));
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWorktrees([]);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projectDir]);
+
+  async function handlePick(wt: { path: string; branch?: string }) {
+    const updated: Workspace = {
+      ...workspace,
+      worktree: {
+        name: basenameOf(wt.path),
+        path: wt.path,
+        createdAt: new Date().toISOString(),
+      },
+      ...(wt.branch ? { branch: wt.branch } : {}),
+    };
+    const saved = await window.api.workspaces.update(wingId, updated);
+    onPicked(saved);
+    setOpen(false);
+  }
+
+  return (
+    <div className="relative">
+      <button
+        className="btn btn-ghost btn-sm flex items-center gap-1"
+        onClick={() => setOpen((p) => !p)}
+        title="Pick or create a worktree for this space"
+      >
+        <PlusIcon className="w-3.5 h-3.5" />
+        Worktree
+      </button>
+      {open && (
+        <>
+          <div
+            className="gear-menu-backdrop"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            className="absolute top-full left-0 mt-1 z-10 bg-bg-card border border-line rounded-md shadow-[0_4px_16px_rgba(0,0,0,0.3)] flex flex-col"
+            style={{ minWidth: 280, maxWidth: 420 }}
+          >
+            <div className="overflow-y-auto max-h-[280px] py-1">
+              {loading ? (
+                <div className="px-3 py-2 text-sm text-fg-muted">
+                  Loading worktrees…
+                </div>
+              ) : worktrees.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-fg-muted italic">
+                  No existing worktrees
+                </div>
+              ) : (
+                worktrees.map((wt) => (
+                  <button
+                    key={wt.path}
+                    className="w-full text-left px-3 py-2 hover:bg-bg-card-hover flex flex-col gap-0.5"
+                    onClick={() => handlePick(wt)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <code className="text-sm text-fg">
+                        {basenameOf(wt.path)}
+                      </code>
+                      {wt.branch && (
+                        <span className="text-xs text-fg-muted">
+                          on{" "}
+                          <code className="text-fg-muted">{wt.branch}</code>
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-fg-muted truncate">
+                      {wt.path}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+            <button
+              className="border-t border-line px-3 py-2 text-sm text-fg-link hover:bg-bg-card-hover flex items-center gap-1.5"
+              onClick={() => {
+                setOpen(false);
+                onCreateNew();
+              }}
+            >
+              <PlusIcon className="w-4 h-4" />
+              Create new worktree…
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

@@ -47,6 +47,7 @@
     }
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "marked": "^18.0.0",
     "react": "^18.3.1",

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { PathInput } from "./PathInput";
+import { Checkbox } from "./Checkbox";
 import { ConnectorsPanel } from "./ConnectorsPanel";
 import type {
   AtriumConfig,
@@ -52,6 +53,7 @@ function findAction<T extends LaunchAction["type"]>(
 interface ProfileEditorState {
   preset: Preset;
   editorApp: "cursor" | "code";
+  editorWithClaude: boolean;
   terminalApp: "ghostty" | "iterm" | "terminal" | "warp";
   customCmd: string;
 }
@@ -67,6 +69,7 @@ function initialProfileState(
   return {
     preset,
     editorApp: editorAction?.app ?? "cursor",
+    editorWithClaude: editorAction?.withClaude ?? false,
     terminalApp: (tmuxAction?.app ??
       cmdAction?.app ??
       "ghostty") as ProfileEditorState["terminalApp"],
@@ -77,12 +80,22 @@ function initialProfileState(
 function buildProfile(state: ProfileEditorState): LaunchAction[] {
   switch (state.preset) {
     case "editor-only":
-      return [{ type: "editor", app: state.editorApp }];
+      return [
+        {
+          type: "editor",
+          app: state.editorApp,
+          withClaude: state.editorWithClaude,
+        },
+      ];
     case "terminal-tmux":
       return [{ type: "terminal-tmux", app: state.terminalApp }];
     case "editor-and-terminal":
       return [
-        { type: "editor", app: state.editorApp },
+        {
+          type: "editor",
+          app: state.editorApp,
+          withClaude: state.editorWithClaude,
+        },
         { type: "terminal-tmux", app: state.terminalApp },
       ];
     case "terminal-cmd":
@@ -179,6 +192,20 @@ function LaunchProfileEditor({
               </button>
             ))}
           </div>
+          {state.editorApp === "code" && (
+            <label className="wt-checkbox-label" style={{ marginTop: 8 }}>
+              <Checkbox
+                checked={state.editorWithClaude}
+                onChange={() =>
+                  onChange({
+                    ...state,
+                    editorWithClaude: !state.editorWithClaude,
+                  })
+                }
+              />
+              Open Claude panel with workspace context
+            </label>
+          )}
         </div>
       )}
 
@@ -226,7 +253,7 @@ export function SettingsModal({ wing, onClose, onSave, onRerunSetup }: Props) {
 
   // Wing state
   const [wingName, setWingName] = useState(wing.name);
-  const [wingRootDir, setWingRootDir] = useState(wing.rootDir ?? "");
+  const [wingProjectDir, setWingProjectDir] = useState(wing.projectDir ?? "");
   const [overrideProfile, setOverrideProfile] = useState<boolean>(
     wing.launchProfile !== undefined,
   );
@@ -256,7 +283,7 @@ export function SettingsModal({ wing, onClose, onSave, onRerunSetup }: Props) {
       await window.api.wings.update({
         ...wing,
         name: wingName.trim() || wing.name,
-        rootDir: wingRootDir.trim() || undefined,
+        projectDir: wingProjectDir.trim() || undefined,
         launchProfile: overrideProfile
           ? buildProfile(wingProfileState)
           : undefined,
@@ -312,20 +339,19 @@ export function SettingsModal({ wing, onClose, onSave, onRerunSetup }: Props) {
             </div>
 
             <div className="form-group">
-              <label className="form-label">Root directory</label>
+              <label className="form-label">Project directory</label>
               <PathInput
-                value={wingRootDir}
-                onChange={setWingRootDir}
+                value={wingProjectDir}
+                onChange={setWingProjectDir}
                 placeholder="~/your-project-directory"
               />
             </div>
 
             <div className="form-group">
               <label className="wt-checkbox-label">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={overrideProfile}
-                  onChange={(e) => setOverrideProfile(e.target.checked)}
+                  onChange={() => setOverrideProfile(!overrideProfile)}
                 />
                 Override default launch profile for this wing
               </label>

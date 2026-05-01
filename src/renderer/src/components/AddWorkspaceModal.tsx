@@ -1,24 +1,14 @@
 import { useState } from "react";
-import { DirectoryField } from "./DirectoryField";
 import type { Workspace } from "../../../shared/types";
 
 interface Props {
-  defaultDirectoryPath?: string;
   onAdd: (data: Omit<Workspace, "id" | "createdAt" | "updatedAt">) => void;
   onClose: () => void;
 }
 
-export function AddWorkspaceModal({
-  defaultDirectoryPath,
-  onAdd,
-  onClose,
-}: Props) {
+export function AddWorkspaceModal({ onAdd, onClose }: Props) {
   const [title, setTitle] = useState("");
   const [type, setType] = useState<Workspace["type"]>("feature");
-  const [directoryPath, setDirectoryPath] = useState<string | undefined>(
-    defaultDirectoryPath,
-  );
-  const [branch, setBranch] = useState<string | undefined>(undefined);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -27,8 +17,6 @@ export function AddWorkspaceModal({
       title: title.trim(),
       type,
       status: "active",
-      branch,
-      directoryPath,
       prs: [],
       todos: [],
       notes: [],
@@ -63,19 +51,6 @@ export function AddWorkspaceModal({
               <option value="research">research</option>
               <option value="bug">bug</option>
             </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Directory</label>
-            <DirectoryField
-              directoryPath={directoryPath}
-              branch={branch}
-              onChange={(next) => {
-                if ("directoryPath" in next)
-                  setDirectoryPath(next.directoryPath);
-                if ("branch" in next) setBranch(next.branch);
-              }}
-            />
           </div>
 
           <div className="modal-actions">

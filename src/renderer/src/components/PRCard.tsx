@@ -122,15 +122,19 @@ export function PRCard({
 }
 
 interface SkeletonProps {
-  number: number;
-  repo: string;
+  number?: number;
+  repo?: string;
 }
 
 export function PRCardSkeleton({ number, repo }: SkeletonProps) {
   return (
     <div className="pr-card">
       <div className="pr-card-header">
-        <span className="pr-card-number">#{number}</span>
+        {number !== undefined ? (
+          <span className="pr-card-number">#{number}</span>
+        ) : (
+          <span className="shimmer-bar w-12 h-4" />
+        )}
         <div className="pr-card-badges">
           <span className="shimmer-bar w-10 h-4" />
         </div>
@@ -139,7 +143,11 @@ export function PRCardSkeleton({ number, repo }: SkeletonProps) {
         <span className="shimmer-bar w-full block" />
       </div>
       <div className="pr-card-footer">
-        <span className="pr-card-repo">{repo}</span>
+        {repo !== undefined ? (
+          <span className="pr-card-repo">{repo}</span>
+        ) : (
+          <span className="shimmer-bar w-24 h-4" />
+        )}
         <span className="shimmer-bar w-16 h-4" />
       </div>
     </div>

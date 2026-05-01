@@ -3,7 +3,7 @@ import { promisify } from "util";
 import { readdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { getConfig, getWingRootDir } from "./store";
+import { getConfig, getWingProjectDir } from "./store";
 import type { PRStatus, RepoInfo } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
@@ -70,7 +70,7 @@ async function scopedPRQuery(
   wingId: string,
   baseQuery: string,
 ): Promise<PRStatus[]> {
-  const rootDir = getWingRootDir(wingId);
+  const rootDir = getWingProjectDir(wingId);
 
   // No root dir configured → unbounded query across all of GitHub.
   if (!rootDir) return gql(baseQuery);
@@ -140,7 +140,7 @@ function parseGitRemote(url: string): string | null {
 }
 
 export async function getDefaultRepo(wingId: string): Promise<string | null> {
-  const rootDir = getWingRootDir(wingId);
+  const rootDir = getWingProjectDir(wingId);
   if (!rootDir) return null;
   const repos = await getReposInDirectory(rootDir);
   return repos.length > 0 ? repos[0].repo : null;

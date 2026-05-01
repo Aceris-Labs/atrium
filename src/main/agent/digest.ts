@@ -1,6 +1,9 @@
 import { spawn } from "child_process";
 import type { Workspace, PRStatus, LinkStatus } from "../../shared/types";
 import { findClaudePath } from "../connectors/strategy";
+import { listWorkspaces } from "../store";
+import { fetchPR } from "../github";
+import { hydrateLinks } from "../linkHydration";
 
 function buildPrompt(
   workspace: Workspace,
@@ -184,10 +187,34 @@ Be specific — use actual PR titles, ticket names, todo items, and content from
  * claude CLI. Returns the summary text.
  */
 export async function generateWingSummary(
-  workspaces: Workspace[],
-  prStatuses: PRStatus[],
-  linkStatuses: Record<string, LinkStatus>,
+  wingId: string,
+  workspaceIds: string[],
 ): Promise<string> {
+  if (workspaceIds.length === 0) throw new Error("no spaces selected");
+
+  const all = listWorkspaces(wingId);
+  const workspaces = all.filter((w) => workspaceIds.includes(w.id));
+  if (workspaces.length === 0) throw new Error("no spaces selected");
+
+  const seen = new Set<string>();
+  const uniqueRefs = workspaces
+    .flatMap((w) => w.prs)
+    .filter((p) => {
+      const key = `${p.repo}/${p.number}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const prStatuses = (
+    await Promise.all(uniqueRefs.map((r) => fetchPR(r.repo, r.number)))
+  ).filter((p): p is PRStatus => p !== null);
+
+  const urls = [
+    ...new Set(workspaces.flatMap((w) => w.links.map((l) => l.url))),
+  ];
+  const linkStatuses: Record<string, LinkStatus> =
+    urls.length > 0 ? await hydrateLinks(urls) : {};
+
   const claudePath = findClaudePath();
   if (!claudePath) throw new Error("claude CLI not found");
 

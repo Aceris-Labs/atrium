@@ -7,6 +7,12 @@ marked.setOptions({ gfm: true, breaks: true });
 interface Props {
   notes: NoteItem[];
   onChange: (notes: NoteItem[]) => void;
+  /** Fired when a note drag begins. Lets parent enable cross-component drop targets. */
+  onNoteDragStart?: (note: NoteItem) => void;
+  /** Fired when a note drag ends (drop or cancel). */
+  onNoteDragEnd?: () => void;
+  emptyMessage?: string;
+  placeholder?: string;
 }
 
 function formatNoteTime(iso: string): string {
@@ -27,7 +33,14 @@ function formatNoteTime(iso: string): string {
   return label;
 }
 
-export function NotesSection({ notes, onChange }: Props) {
+export function NotesSection({
+  notes,
+  onChange,
+  onNoteDragStart,
+  onNoteDragEnd,
+  emptyMessage,
+  placeholder,
+}: Props) {
   const [input, setInput] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -93,6 +106,7 @@ export function NotesSection({ notes, onChange }: Props) {
   function handleDragEnd() {
     setDraggingId(null);
     setInsertBeforeIdx(null);
+    onNoteDragEnd?.();
   }
 
   return (
@@ -110,7 +124,7 @@ export function NotesSection({ notes, onChange }: Props) {
               handleAdd();
             }
           }}
-          placeholder="Add a note… (⌘↩ to save)"
+          placeholder={placeholder ?? "Add a note… (⌘↩ to save)"}
         />
         <div className="flex justify-end">
           <button
@@ -125,7 +139,9 @@ export function NotesSection({ notes, onChange }: Props) {
 
       {/* Note list */}
       {notes.length === 0 ? (
-        <p className="detail-empty-text">No notes yet. Add one above.</p>
+        <p className="detail-empty-text">
+          {emptyMessage ?? "No notes yet. Add one above."}
+        </p>
       ) : (
         <div
           className="flex flex-col gap-2"
@@ -194,6 +210,7 @@ export function NotesSection({ notes, onChange }: Props) {
                           );
                         }
                         setDraggingId(note.id);
+                        onNoteDragStart?.(note);
                       }}
                       onDragEnd={handleDragEnd}
                       className="flex items-start pt-[2px] shrink-0 opacity-0 group-hover:opacity-40 cursor-grab text-fg-muted select-none text-base leading-none"

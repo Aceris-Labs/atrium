@@ -15,13 +15,14 @@ const api: WindowApi = {
     list: () => ipcRenderer.invoke("wings:list"),
     create: (data: {
       name: string;
-      rootDir?: string;
+      projectDir?: string;
       launchProfile?: LaunchAction[];
     }) => ipcRenderer.invoke("wings:create", data),
     update: (wing: Wing) => ipcRenderer.invoke("wings:update", wing),
     reorder: (orderedIds: string[]) =>
       ipcRenderer.invoke("wings:reorder", orderedIds),
     setActive: (id: string) => ipcRenderer.invoke("wings:setActive", id),
+    delete: (id: string) => ipcRenderer.invoke("wings:delete", id),
   },
   workspaces: {
     list: (wingId: string) => ipcRenderer.invoke("workspaces:list", wingId),
@@ -30,6 +31,12 @@ const api: WindowApi = {
     update: (wingId, workspace) =>
       ipcRenderer.invoke("workspaces:update", wingId, workspace),
     delete: (wingId, id) => ipcRenderer.invoke("workspaces:delete", wingId, id),
+    updateMany: (wingId, updates) =>
+      ipcRenderer.invoke("workspaces:updateMany", wingId, updates),
+    deleteMany: (wingId, ids) =>
+      ipcRenderer.invoke("workspaces:deleteMany", wingId, ids),
+    reorder: (wingId, orderedIds) =>
+      ipcRenderer.invoke("workspaces:reorder", wingId, orderedIds),
     move: (fromWingId, toWingId, id) =>
       ipcRenderer.invoke("workspaces:move", fromWingId, toWingId, id),
   },
@@ -59,19 +66,30 @@ const api: WindowApi = {
         prStatuses,
         linkStatuses,
       ),
-  },
-  wing: {
-    summarize: (
-      workspaces: Workspace[],
-      prStatuses: PRStatus[],
-      linkStatuses: Record<string, LinkStatus>,
+    createWorktree: (
+      wingId: string,
+      workspaceId: string,
+      params:
+        | { tab: "create"; name: string; path: string }
+        | { tab: "script"; command: string },
     ) =>
       ipcRenderer.invoke(
-        "wing:summarize",
-        workspaces,
-        prStatuses,
-        linkStatuses,
+        "workspace:createWorktree",
+        wingId,
+        workspaceId,
+        params,
       ),
+    deleteWorktree: (wingId: string, workspaceId: string, gitRemove: boolean) =>
+      ipcRenderer.invoke(
+        "workspace:deleteWorktree",
+        wingId,
+        workspaceId,
+        gitRemove,
+      ),
+  },
+  wing: {
+    summarize: (wingId: string, workspaceIds: string[]) =>
+      ipcRenderer.invoke("wing:summarize", wingId, workspaceIds),
   },
   shell: {
     openExternal: (url: string) => shell.openExternal(url),
@@ -80,6 +98,8 @@ const api: WindowApi = {
     statuses: (sessions: Record<string, AgentSessionInfo | undefined>) =>
       ipcRenderer.invoke("agents:statuses", sessions),
     sessions: () => ipcRenderer.invoke("agents:sessions"),
+    recap: (info: AgentSessionInfo | undefined) =>
+      ipcRenderer.invoke("agents:recap", info),
   },
   watchedPRs: {
     list: (wingId: string) => ipcRenderer.invoke("watchedPRs:list", wingId),
@@ -98,8 +118,10 @@ const api: WindowApi = {
   git: {
     detectRepo: (dirPath: string) =>
       ipcRenderer.invoke("git:detectRepo", dirPath),
-    checkoutBranch: (dirPath: string, branch: string) =>
-      ipcRenderer.invoke("git:checkoutBranch", dirPath, branch),
+    currentBranch: (dirPath: string) =>
+      ipcRenderer.invoke("git:currentBranch", dirPath),
+    listWorktrees: (dirPath: string) =>
+      ipcRenderer.invoke("git:listWorktrees", dirPath),
   },
   fs: {
     listDirs: (partial: string) => ipcRenderer.invoke("fs:listDirs", partial),

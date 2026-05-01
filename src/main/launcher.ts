@@ -2,8 +2,10 @@ import { spawn, spawnSync } from "child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { shell } from "electron";
 import { getEffectiveLaunchProfile, getWing, updateWorkspace } from "./store";
-import type { TmuxPane, Workspace } from "../shared/types";
+import { currentBranch, checkoutBranch } from "./git";
+import type { LaunchAction, TmuxPane, Workspace } from "../shared/types";
 
 function resolveDir(dir?: string): string | undefined {
   if (!dir) return undefined;
@@ -46,20 +48,43 @@ const EDITOR_BINS: Record<string, string[]> = {
 export function launchWorkspace(wingId: string, workspace: Workspace): string {
   const launchProfile = getEffectiveLaunchProfile(wingId);
   const sessionName = workspace.tmuxSession ?? workspace.id;
+  const wing = getWing(wingId);
 
-  const dir = resolveDir(workspace.directoryPath);
+  const dir = resolveDir(
+    workspace.worktree?.path ?? wing?.projectDir ?? workspace.directoryPath,
+  );
 
-  // Snapshot existing Claude session ids before launch so we can detect
-  // the new one that gets created and persist it onto the workspace.
+  // Spaces with a worktree are isolated: ensure the worktree is on the
+  // workspace's focus branch before any shells/editors open. Spaces without
+  // a worktree share the wing's project dir and we leave its branch alone.
+  if (dir && workspace.worktree && workspace.branch) {
+    const head = currentBranch(dir);
+    if (head && head !== workspace.branch) {
+      const err = checkoutBranch(dir, workspace.branch);
+      if (err) {
+        throw new Error(
+          `Could not check out '${workspace.branch}' in ${dir}: ${err}`,
+        );
+      }
+    }
+  }
+
   const existingIds = dir ? listJsonlSessionIds(dir) : new Set<string>();
 
   for (const action of launchProfile) {
     switch (action.type) {
       case "editor":
-        launchEditor(action.app, dir);
+        launchEditor(action, workspace, wingId, dir);
         break;
       case "terminal-tmux":
-        launchTerminalTmux(action.app, sessionName, workspace, dir, action.panes, wingId);
+        launchTerminalTmux(
+          action.app,
+          sessionName,
+          workspace,
+          dir,
+          action.panes,
+          wingId,
+        );
         break;
       case "terminal-cmd":
         launchTerminalCmd(action.app, action.command, dir);
@@ -75,13 +100,25 @@ export function launchWorkspace(wingId: string, workspace: Workspace): string {
   return sessionName;
 }
 
-function launchEditor(app: string, directoryPath?: string): void {
+function launchEditor(
+  action: Extract<LaunchAction, { type: "editor" }>,
+  workspace: Workspace,
+  wingId: string,
+  directoryPath: string | undefined,
+): void {
   if (!directoryPath) return;
-  const bins = EDITOR_BINS[app] ?? [app];
+  const bins = EDITOR_BINS[action.app] ?? [action.app];
   spawn(bins[0], ["--new-window", directoryPath], {
     detached: true,
     stdio: "ignore",
   }).unref();
+
+  if (action.app === "code" && action.withClaude) {
+    const md = buildWorkspaceContextMarkdown(workspace, wingId);
+    const prompt = `Workspace context for this session:\n\n${md}`;
+    const uri = `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`;
+    void shell.openExternal(uri);
+  }
 }
 
 const DEFAULT_PANES: TmuxPane[] = [
@@ -302,7 +339,10 @@ function activateApp(app: string): void {
   }
 }
 
-function buildClaudeCommand(workspace: Workspace, dir: string, wingId: string): string {
+function buildWorkspaceContextMarkdown(
+  workspace: Workspace,
+  wingId: string,
+): string {
   const wingName = getWing(wingId)?.name ?? wingId;
   const lines: string[] = [`# ${wingName} / ${workspace.title}`, ""];
   const todos = workspace.todos ?? [];
@@ -326,8 +366,17 @@ function buildClaudeCommand(workspace: Workspace, dir: string, wingId: string): 
     lines.push("");
   }
   if (workspace.branch) lines.push("## Branch", workspace.branch, "");
+  return lines.join("\n");
+}
+
+function buildClaudeCommand(
+  workspace: Workspace,
+  dir: string,
+  wingId: string,
+): string {
+  const md = buildWorkspaceContextMarkdown(workspace, wingId);
   const contextPath = `/tmp/atrium-context-${workspace.id}.md`;
-  writeFileSync(contextPath, lines.join("\n"), "utf-8");
+  writeFileSync(contextPath, md, "utf-8");
   const id = workspace.claudeSessionId;
   const resumeFlag = id ? `--resume ${id} ` : "";
   return `claude ${resumeFlag}--append-system-prompt "$(cat ${contextPath})"`;

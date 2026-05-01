@@ -2,13 +2,13 @@ import { useState } from "react";
 import { PathInput } from "./PathInput";
 
 interface Props {
-  onCreate: (data: { name: string; rootDir?: string }) => void;
+  onCreate: (data: { name: string; projectDir?: string }) => void;
   onClose: () => void;
 }
 
 export function CreateWingModal({ onCreate, onClose }: Props) {
   const [name, setName] = useState("");
-  const [rootDir, setRootDir] = useState("");
+  const [projectDir, setProjectDir] = useState("");
   const [creating, setCreating] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -18,7 +18,7 @@ export function CreateWingModal({ onCreate, onClose }: Props) {
     try {
       await onCreate({
         name: name.trim(),
-        rootDir: rootDir.trim() || undefined,
+        projectDir: projectDir.trim() || undefined,
       });
     } finally {
       setCreating(false);
@@ -45,10 +45,10 @@ export function CreateWingModal({ onCreate, onClose }: Props) {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">Root directory (optional)</label>
+            <label className="form-label">Project directory (optional)</label>
             <PathInput
-              value={rootDir}
-              onChange={setRootDir}
+              value={projectDir}
+              onChange={setProjectDir}
               placeholder="~/projects/myproject"
             />
           </div>

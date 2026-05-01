@@ -1,92 +1,101 @@
-import { useEffect, useRef, useState } from 'react'
-import type { Wing } from '../../../shared/types'
+import { useEffect, useRef, useState } from "react";
+import type { Wing } from "../../../shared/types";
 
 interface Props {
-  wings: Wing[]
-  activeId: string | null
-  onSelect: (id: string) => void
-  onReorder: (orderedIds: string[]) => void
-  onRename: (id: string, newName: string) => void | Promise<void>
-  onCreate: () => void
+  wings: Wing[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  onReorder: (orderedIds: string[]) => void;
+  onRename: (id: string, newName: string) => void | Promise<void>;
+  onDelete: (id: string) => void | Promise<void>;
+  onCreate: () => void;
 }
 
-export function WingTabs({ wings, activeId, onSelect, onReorder, onRename, onCreate }: Props) {
-  const [draggingId, setDraggingId] = useState<string | null>(null)
-  const [dragOverId, setDragOverId] = useState<string | null>(null)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editDraft, setEditDraft] = useState('')
-  const editInputRef = useRef<HTMLInputElement>(null)
+export function WingTabs({
+  wings,
+  activeId,
+  onSelect,
+  onReorder,
+  onRename,
+  onDelete,
+  onCreate,
+}: Props) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (editingId) editInputRef.current?.select()
-  }, [editingId])
+    if (editingId) editInputRef.current?.select();
+  }, [editingId]);
 
   function startEditing(wing: Wing) {
-    setEditingId(wing.id)
-    setEditDraft(wing.name)
+    setEditingId(wing.id);
+    setEditDraft(wing.name);
   }
 
   function commitEdit() {
-    if (!editingId) return
-    const id = editingId
-    const draft = editDraft
-    setEditingId(null)
-    setEditDraft('')
-    void onRename(id, draft)
+    if (!editingId) return;
+    const id = editingId;
+    const draft = editDraft;
+    setEditingId(null);
+    setEditDraft("");
+    void onRename(id, draft);
   }
 
   function cancelEdit() {
-    setEditingId(null)
-    setEditDraft('')
+    setEditingId(null);
+    setEditDraft("");
   }
 
   function handleDragStart(e: React.DragEvent, id: string) {
-    setDraggingId(id)
-    e.dataTransfer.effectAllowed = 'move'
+    setDraggingId(id);
+    e.dataTransfer.effectAllowed = "move";
     // Needed so Firefox fires the drag events
-    e.dataTransfer.setData('text/plain', id)
+    e.dataTransfer.setData("text/plain", id);
   }
 
   function handleDragOver(e: React.DragEvent, id: string) {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    if (id !== dragOverId) setDragOverId(id)
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (id !== dragOverId) setDragOverId(id);
   }
 
   function handleDrop(e: React.DragEvent, targetId: string) {
-    e.preventDefault()
+    e.preventDefault();
     if (!draggingId || draggingId === targetId) {
-      setDraggingId(null)
-      setDragOverId(null)
-      return
+      setDraggingId(null);
+      setDragOverId(null);
+      return;
     }
-    const order = wings.map((w) => w.id)
-    const fromIdx = order.indexOf(draggingId)
-    const toIdx = order.indexOf(targetId)
-    if (fromIdx === -1 || toIdx === -1) return
-    order.splice(fromIdx, 1)
-    order.splice(toIdx, 0, draggingId)
-    onReorder(order)
-    setDraggingId(null)
-    setDragOverId(null)
+    const order = wings.map((w) => w.id);
+    const fromIdx = order.indexOf(draggingId);
+    const toIdx = order.indexOf(targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    order.splice(fromIdx, 1);
+    order.splice(toIdx, 0, draggingId);
+    onReorder(order);
+    setDraggingId(null);
+    setDragOverId(null);
   }
 
   function handleDragEnd() {
-    setDraggingId(null)
-    setDragOverId(null)
+    setDraggingId(null);
+    setDragOverId(null);
   }
 
   // VS Code-style tabs: flush rectangles, border-l as separator, top accent on active.
   const tabBase =
-    'inline-flex items-center h-full px-6 text-base max-w-[220px] whitespace-nowrap overflow-hidden text-ellipsis cursor-pointer border-t-2 border-t-transparent border-l border-l-line first:border-l-0 transition-colors duration-100'
+    "group inline-flex items-center gap-2 h-full pl-4 pr-2 text-base max-w-[220px] cursor-pointer border-t-2 border-t-transparent border-l border-l-line first:border-l-0 transition-colors duration-100";
 
   return (
     <div className="flex items-stretch self-stretch [-webkit-app-region:no-drag]">
       {wings.map((wing) => {
-        const isActive = wing.id === activeId
-        const isDragging = wing.id === draggingId
-        const isDragOver = wing.id === dragOverId && !isDragging
-        const isEditing = wing.id === editingId
+        const isActive = wing.id === activeId;
+        const isDragging = wing.id === draggingId;
+        const isDragOver = wing.id === dragOverId && !isDragging;
+        const isEditing = wing.id === editingId;
         if (isEditing) {
           return (
             <input
@@ -97,29 +106,28 @@ export function WingTabs({ wings, activeId, onSelect, onReorder, onRename, onCre
               onChange={(e) => setEditDraft(e.target.value)}
               onBlur={commitEdit}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  commitEdit()
-                } else if (e.key === 'Escape') {
-                  e.preventDefault()
-                  cancelEdit()
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitEdit();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelEdit();
                 }
               }}
             />
-          )
+          );
         }
         const stateClasses = isActive
-          ? 'bg-bg-card text-fg font-semibold !border-t-blue'
-          : 'bg-transparent text-fg-muted font-medium hover:bg-bg-card hover:text-fg'
+          ? "bg-bg-card text-fg font-semibold !border-t-blue"
+          : "bg-transparent text-fg-muted font-medium hover:bg-bg-card hover:text-fg";
         const dragClasses = isDragging
-          ? 'opacity-50'
+          ? "opacity-50"
           : isDragOver
-            ? '!border-t-line-hover'
-            : ''
+            ? "!border-t-line-hover"
+            : "";
         return (
-          <button
+          <div
             key={wing.id}
-            type="button"
             className={`${tabBase} ${stateClasses} ${dragClasses}`}
             draggable
             onClick={() => onSelect(wing.id)}
@@ -129,9 +137,22 @@ export function WingTabs({ wings, activeId, onSelect, onReorder, onRename, onCre
             onDrop={(e) => handleDrop(e, wing.id)}
             onDragEnd={handleDragEnd}
           >
-            {wing.name}
-          </button>
-        )
+            <span className="truncate">{wing.name}</span>
+            {wings.length > 1 && (
+              <button
+                type="button"
+                className="shrink-0 w-4 h-4 flex items-center justify-center rounded-sm opacity-0 group-hover:opacity-100 hover:bg-line text-fg-muted hover:text-fg transition-opacity duration-100"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void onDelete(wing.id);
+                }}
+                title="Delete wing"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        );
       })}
       <button
         type="button"
@@ -142,5 +163,5 @@ export function WingTabs({ wings, activeId, onSelect, onReorder, onRename, onCre
         +
       </button>
     </div>
-  )
+  );
 }

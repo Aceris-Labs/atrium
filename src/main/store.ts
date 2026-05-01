@@ -4,6 +4,7 @@ import {
   existsSync,
   readdirSync,
   renameSync,
+  rmSync,
 } from "fs";
 import { writeFile } from "fs/promises";
 import { join } from "path";
@@ -108,7 +109,7 @@ function runMigrationIfNeeded(): void {
   const wing: Wing = {
     id: wingId,
     name: "Main",
-    rootDir: legacyRootDir,
+    projectDir: legacyRootDir,
     launchProfile: undefined, // inherit default
     createdAt: new Date().toISOString(),
   };
@@ -173,6 +174,14 @@ export async function setConfig(
 }
 
 // ── Wings ──────────────────────────────────────────────────────────────────
+function migrateWingData(raw: Record<string, unknown>): Wing {
+  if (raw.rootDir && !raw.projectDir) {
+    raw.projectDir = raw.rootDir;
+    delete raw.rootDir;
+  }
+  return raw as unknown as Wing;
+}
+
 export function listWings(): Wing[] {
   const config = getConfig();
   const order = config.wingOrder;
@@ -180,7 +189,12 @@ export function listWings(): Wing[] {
   for (const id of order) {
     const file = join(wingDir(id), "wing.json");
     if (!existsSync(file)) continue;
-    wings.push(readJson<Wing>(file, { id, name: id, createdAt: "" } as Wing));
+    const raw = readJson<Record<string, unknown>>(file, {
+      id,
+      name: id,
+      createdAt: "",
+    });
+    wings.push(migrateWingData(raw));
   }
   return wings;
 }
@@ -188,12 +202,14 @@ export function listWings(): Wing[] {
 export function getWing(id: string): Wing | null {
   const file = join(wingDir(id), "wing.json");
   if (!existsSync(file)) return null;
-  return readJson<Wing>(file, null as unknown as Wing);
+  const raw = readJson<Record<string, unknown> | null>(file, null);
+  if (!raw) return null;
+  return migrateWingData(raw);
 }
 
 export async function createWing(data: {
   name: string;
-  rootDir?: string;
+  projectDir?: string;
   launchProfile?: LaunchAction[];
 }): Promise<Wing> {
   ensureDir(WINGS_DIR);
@@ -204,7 +220,7 @@ export async function createWing(data: {
   const wing: Wing = {
     id,
     name: data.name.trim() || "Untitled wing",
-    rootDir: data.rootDir?.trim() || undefined,
+    projectDir: data.projectDir?.trim() || undefined,
     launchProfile: data.launchProfile,
     createdAt: new Date().toISOString(),
   };
@@ -229,6 +245,16 @@ export async function updateWing(updated: Wing): Promise<Wing> {
   return updated;
 }
 
+export async function deleteWing(id: string): Promise<void> {
+  const dir = wingDir(id);
+  if (existsSync(dir)) rmSync(dir, { recursive: true });
+  const config = getConfig();
+  const newOrder = config.wingOrder.filter((wid) => wid !== id);
+  const newActive =
+    config.activeWingId === id ? (newOrder[0] ?? null) : config.activeWingId;
+  await setConfig({ wingOrder: newOrder, activeWingId: newActive });
+}
+
 export async function reorderWings(orderedIds: string[]): Promise<void> {
   const config = getConfig();
   // Keep only ids that still have a wing dir; append any that were missed so nothing disappears.
@@ -250,8 +276,8 @@ export function getEffectiveLaunchProfile(wingId: string): LaunchAction[] {
   return wing?.launchProfile ?? config.defaultLaunchProfile;
 }
 
-export function getWingRootDir(wingId: string): string | undefined {
-  return getWing(wingId)?.rootDir;
+export function getWingProjectDir(wingId: string): string | undefined {
+  return getWing(wingId)?.projectDir;
 }
 
 // ── Wing-scoped workspaces ─────────────────────────────────────────────────
@@ -371,6 +397,62 @@ export async function updateWorkspace(
   workspaces[idx] = { ...updated, updatedAt: new Date().toISOString() };
   await saveWorkspaces(wingId, workspaces);
   return workspaces[idx];
+}
+
+/** Atomic bulk update: applies all changes in a single read-modify-write so
+ *  callers don't race the workspaces.json file. Returns the updated records. */
+export async function updateWorkspaces(
+  wingId: string,
+  updates: Workspace[],
+): Promise<Workspace[]> {
+  const workspaces = listWorkspaces(wingId);
+  const now = new Date().toISOString();
+  const byId = new Map(updates.map((w) => [w.id, w]));
+  const result: Workspace[] = [];
+  for (let i = 0; i < workspaces.length; i++) {
+    const next = byId.get(workspaces[i].id);
+    if (next) {
+      workspaces[i] = { ...next, updatedAt: now };
+      result.push(workspaces[i]);
+    }
+  }
+  await saveWorkspaces(wingId, workspaces);
+  return result;
+}
+
+/** Atomic bulk delete in a single read-modify-write. */
+export async function deleteWorkspaces(
+  wingId: string,
+  ids: string[],
+): Promise<void> {
+  const idSet = new Set(ids);
+  await saveWorkspaces(
+    wingId,
+    listWorkspaces(wingId).filter((w) => !idSet.has(w.id)),
+  );
+}
+
+/** Reorders workspaces by the given id list. IDs not in the list are
+ *  appended in their original relative order so nothing disappears. */
+export async function reorderWorkspaces(
+  wingId: string,
+  orderedIds: string[],
+): Promise<void> {
+  const current = listWorkspaces(wingId);
+  const byId = new Map(current.map((w) => [w.id, w]));
+  const seen = new Set<string>();
+  const ordered: Workspace[] = [];
+  for (const id of orderedIds) {
+    const ws = byId.get(id);
+    if (ws && !seen.has(id)) {
+      ordered.push(ws);
+      seen.add(id);
+    }
+  }
+  for (const ws of current) {
+    if (!seen.has(ws.id)) ordered.push(ws);
+  }
+  await saveWorkspaces(wingId, ordered);
 }
 
 export async function deleteWorkspace(
