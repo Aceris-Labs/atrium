@@ -238,6 +238,9 @@ export function WorkspaceDetail({
     window.api.agents.sessions().then(setAvailableSessions);
   }, [workspace.id]);
 
+  const wing = allWings.find((w) => w.id === wingId);
+  const effectiveDir = workspace.worktree?.path ?? wing?.projectDir;
+
   useEffect(() => {
     if (!workspace.claudeSessionId) {
       setRecap(null);
@@ -267,9 +270,6 @@ export function WorkspaceDetail({
     workspace.worktree?.path,
     wing?.projectDir,
   ]);
-
-  const wing = allWings.find((w) => w.id === wingId);
-  const effectiveDir = workspace.worktree?.path ?? wing?.projectDir;
 
   // Show the worktree's actual current HEAD (so the header reflects shell
   // checkouts), not the saved workspace.branch field.

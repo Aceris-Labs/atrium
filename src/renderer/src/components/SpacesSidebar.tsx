@@ -565,7 +565,7 @@ export function SpacesSidebar({
                       return (
                         <div
                           key={ws.id}
-                          className={expanded ? "" : "flex flex-col"}
+                          className="relative h-full"
                           onDragOver={(e) => {
                             if (!sameSection) return;
                             e.preventDefault();
@@ -589,15 +589,6 @@ export function SpacesSidebar({
                             setReorderTarget(null);
                           }}
                         >
-                          {showLineBefore && (
-                            <div
-                              className={
-                                expanded
-                                  ? "w-0.5 bg-blue rounded-full mr-1 self-stretch"
-                                  : "h-0.5 bg-blue rounded-full mb-1"
-                              }
-                            />
-                          )}
                           <WorkspaceCard
                             workspace={ws}
                             prStatuses={prStatuses}
@@ -628,12 +619,21 @@ export function SpacesSidebar({
                               setReorderTarget(null);
                             }}
                           />
+                          {showLineBefore && (
+                            <div
+                              className={
+                                expanded
+                                  ? "absolute -left-1.5 top-0 bottom-0 w-1 bg-blue rounded-full pointer-events-none"
+                                  : "absolute -top-1 left-0 right-0 h-1 bg-blue rounded-full pointer-events-none"
+                              }
+                            />
+                          )}
                           {showLineAfter && (
                             <div
                               className={
                                 expanded
-                                  ? "w-0.5 bg-blue rounded-full ml-1 self-stretch"
-                                  : "h-0.5 bg-blue rounded-full mt-1"
+                                  ? "absolute -right-1.5 top-0 bottom-0 w-1 bg-blue rounded-full pointer-events-none"
+                                  : "absolute -bottom-1 left-0 right-0 h-1 bg-blue rounded-full pointer-events-none"
                               }
                             />
                           )}

@@ -417,12 +417,21 @@ export default function App() {
     ids.splice(fromIdx, 1);
     const adjustedTarget = fromIdx < toIdx ? toIdx - 1 : toIdx;
     ids.splice(insertBefore ? adjustedTarget : adjustedTarget + 1, 0, draggedId);
-    // Optimistic local update — no full reload, just splice the array.
     setWorkspaces((prev) => {
       const byId = new Map(prev.map((w) => [w.id, w]));
       return ids.map((id) => byId.get(id)!).filter(Boolean);
     });
-    await window.api.workspaces.reorder(activeWingId, ids);
+    try {
+      await window.api.workspaces.reorder(activeWingId, ids);
+    } catch (e) {
+      console.error("Reorder failed", e);
+      alert(
+        "Reorder failed: " + (e instanceof Error ? e.message : String(e)),
+      );
+      // Roll back local state by re-listing from disk
+      const fresh = await window.api.workspaces.list(activeWingId);
+      setWorkspaces(fresh);
+    }
   }
 
   async function bulkDelete() {
