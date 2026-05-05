@@ -12,6 +12,13 @@ import { PRCard, PRCardSkeleton } from "./PRCard";
 import { LinkCard } from "./LinkCard";
 import { ItemsTab } from "./ItemsTab";
 import { CreateWorktreeModal } from "./CreateWorktreeModal";
+import { Checkbox } from "./Checkbox";
+import {
+  LaunchProfileEditor,
+  initialProfileState,
+  buildProfile,
+  type ProfileEditorState,
+} from "./LaunchProfileEditor";
 import type {
   PRStatus,
   Workspace,
@@ -21,6 +28,7 @@ import type {
   LinkCategory,
   LinkStatus,
   GitRepoInfo,
+  DetectedTools,
 } from "../../../shared/types";
 
 type Tab = "overview" | "items" | "links" | "settings";
@@ -52,6 +60,19 @@ interface Props {
   onMove: (id: string, toWingId: string) => void;
   onBack: () => void;
   onRefreshSessions: () => Promise<void>;
+}
+
+function linkStatusBadgeClass(status: string): string {
+  const s = status.toLowerCase();
+  if (s.includes("done") || s.includes("closed") || s.includes("complete"))
+    return "bg-green/10 text-green border-green/40";
+  if (s.includes("progress") || s.includes("review") || s.includes("started"))
+    return "bg-blue/10 text-blue border-blue/40";
+  if (s.includes("block") || s.includes("cancel"))
+    return "bg-red/10 text-red border-red/40";
+  if (s.includes("open") || s.includes("todo") || s.includes("backlog"))
+    return "bg-yellow/10 text-yellow border-yellow/40";
+  return "bg-bg-input text-fg-muted border-line";
 }
 
 function parsePRInput(input: string): { number: number; repo?: string } | null {
@@ -87,6 +108,7 @@ export function WorkspaceDetail({
   onUpdate,
   onDelete,
   onMove,
+  onBack,
   onRefreshSessions,
 }: Props) {
   const items: Item[] = workspace.items ?? [];
@@ -118,6 +140,7 @@ export function WorkspaceDetail({
   });
   const [branchDraft, setBranchDraft] = useState(workspace.branch ?? "");
   const [showCreateWorktree, setShowCreateWorktree] = useState(false);
+  const [showMoveWing, setShowMoveWing] = useState(false);
   const [confirmDeleteWorktree, setConfirmDeleteWorktree] = useState(false);
   const [gitRemoveWorktree, setGitRemoveWorktree] = useState(false);
   const [deletingWorktree, setDeletingWorktree] = useState(false);
@@ -134,6 +157,13 @@ export function WorkspaceDetail({
     key: string;
     before: boolean;
   } | null>(null);
+  const [overrideLaunch, setOverrideLaunch] = useState(
+    workspace.launchProfile !== undefined,
+  );
+  const [profileState, setProfileState] = useState<ProfileEditorState | null>(
+    null,
+  );
+  const [tools, setTools] = useState<DetectedTools | null>(null);
 
   const titleInputRef = useRef<HTMLInputElement>(null);
 
@@ -221,6 +251,21 @@ export function WorkspaceDetail({
 
   useEffect(() => {
     window.api.agents.sessions().then(setAvailableSessions);
+  }, [workspace.id]);
+
+  useEffect(() => {
+    setOverrideLaunch(workspace.launchProfile !== undefined);
+    (async () => {
+      const config = await window.api.config.get();
+      const fromWing = wing?.launchProfile;
+      setProfileState(
+        initialProfileState(
+          workspace.launchProfile ?? fromWing ?? config.defaultLaunchProfile,
+        ),
+      );
+    })();
+    window.api.setup.detect().then(setTools);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id]);
 
   const wing = allWings.find((w) => w.id === wingId);
@@ -534,9 +579,7 @@ export function WorkspaceDetail({
             >
               <span className="meta-chip-label">status</span>
               <span className="flex items-center gap-1.5">
-                <span
-                  className={`status-dot status-${workspace.status}`}
-                />
+                <span className={`status-dot status-${workspace.status}`} />
                 <span className="text-fg">{workspace.status}</span>
               </span>
             </button>
@@ -638,9 +681,7 @@ export function WorkspaceDetail({
               <span className="meta-chip-label">branch</span>
               <code
                 className={
-                  actualBranch || workspace.branch
-                    ? "text-fg"
-                    : "text-fg-muted"
+                  actualBranch || workspace.branch ? "text-fg" : "text-fg-muted"
                 }
               >
                 {actualBranch ?? workspace.branch ?? "—"}
@@ -871,7 +912,13 @@ export function WorkspaceDetail({
               Stop
             </button>
           )}
-
+          <button
+            className="flex items-center justify-center w-7 h-7 ml-1 rounded-sm text-fg-muted hover:text-fg hover:bg-bg-card-hover border border-line"
+            onClick={onBack}
+            title="Close space"
+          >
+            <XMarkIcon className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
@@ -954,11 +1001,7 @@ export function WorkspaceDetail({
                             setPRDropTarget(null);
                           }}
                           onDragOver={(e) => {
-                            if (
-                              !draggingPRKey ||
-                              draggingPRKey === key
-                            )
-                              return;
+                            if (!draggingPRKey || draggingPRKey === key) return;
                             e.preventDefault();
                             const rect =
                               e.currentTarget.getBoundingClientRect();
@@ -967,8 +1010,7 @@ export function WorkspaceDetail({
                             setPRDropTarget({ key, before });
                           }}
                           onDrop={(e) => {
-                            if (!draggingPRKey || draggingPRKey === key)
-                              return;
+                            if (!draggingPRKey || draggingPRKey === key) return;
                             e.preventDefault();
                             handleReorderPR(
                               draggingPRKey,
@@ -1044,7 +1086,12 @@ export function WorkspaceDetail({
               {(items.length > 0 || ticketLinks.length > 0) && (
                 <div className="rounded-md border border-line divide-y divide-line">
                   {items.length > 0 && (
-                    <div className="flex items-center gap-3 px-4 py-3">
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-bg-card-hover text-left"
+                      onClick={() => setActiveTab("items")}
+                      title="Open Items tab"
+                    >
                       <span className="text-xs text-fg-muted w-14 shrink-0">
                         Items
                       </span>
@@ -1059,12 +1106,19 @@ export function WorkspaceDetail({
                       <span className="text-xs text-fg-muted tabular-nums shrink-0">
                         {items.filter((i) => i.done).length}/{items.length} done
                       </span>
-                    </div>
+                    </button>
                   )}
 
                   {ticketLinks.length > 0 && (
                     <div className="flex flex-col gap-2 px-4 py-3">
-                      <span className="text-xs text-fg-muted">Tickets</span>
+                      <button
+                        type="button"
+                        className="text-xs text-fg-muted hover:text-fg text-left -mx-1 px-1 py-0.5 rounded-sm hover:bg-bg-card-hover self-start"
+                        onClick={() => setActiveTab("links")}
+                        title="Open Links tab"
+                      >
+                        Tickets
+                      </button>
                       {ticketLinks.map((link) => {
                         const h = linkHydrations[link.url];
                         const isLoading = hydrationPending.has(link.url);
@@ -1089,7 +1143,9 @@ export function WorkspaceDetail({
                                     : (h?.title ?? link.label)}
                                 </span>
                                 {h?.status && (
-                                  <span className="text-xs px-1.5 py-0.5 rounded-sm border bg-bg-input text-fg-muted border-line shrink-0">
+                                  <span
+                                    className={`text-xs px-1.5 py-0.5 rounded-sm border shrink-0 ${linkStatusBadgeClass(h.status)}`}
+                                  >
                                     {h.status}
                                   </span>
                                 )}
@@ -1215,6 +1271,13 @@ export function WorkspaceDetail({
               hydrations={linkHydrations}
               hydrationPending={hydrationPending}
               onDelete={handleDeleteLink}
+              onReorder={(orderedIds) => {
+                const byId = new Map(linkItems.map((l) => [l.id, l]));
+                const reordered = orderedIds
+                  .map((id) => byId.get(id))
+                  .filter((l): l is WorkspaceLink => !!l);
+                onUpdate({ ...workspace, links: reordered });
+              }}
             />
           )}
 
@@ -1258,24 +1321,57 @@ export function WorkspaceDetail({
               {allWings.length > 1 && (
                 <div className="detail-field-group">
                   <label className="form-label">Move to wing</label>
-                  <select
-                    className="form-select"
-                    value=""
-                    onChange={(e) => {
-                      if (e.target.value) onMove(workspace.id, e.target.value);
-                    }}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm self-start"
+                    onClick={() => setShowMoveWing(true)}
                   >
-                    <option value="">— select wing —</option>
-                    {allWings
-                      .filter((w) => w.id !== wingId)
-                      .map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.name}
-                        </option>
-                      ))}
-                  </select>
+                    Move to another wing…
+                  </button>
                 </div>
               )}
+
+              {/* Launch overrides */}
+              <div className="border border-line rounded-md p-4 flex flex-col gap-3">
+                <label className="wt-checkbox-label">
+                  <Checkbox
+                    checked={overrideLaunch}
+                    onChange={() => {
+                      const next = !overrideLaunch;
+                      setOverrideLaunch(next);
+                      if (!next) {
+                        onUpdate({ ...workspace, launchProfile: undefined });
+                      } else if (profileState) {
+                        onUpdate({
+                          ...workspace,
+                          launchProfile: buildProfile(profileState),
+                        });
+                      }
+                    }}
+                  />
+                  Override launch profile for this space
+                </label>
+                <p className="text-xs text-fg-muted">
+                  When off, this space inherits{" "}
+                  {wing?.launchProfile ? "the wing's" : "the global"} launch
+                  profile.
+                </p>
+                {overrideLaunch && profileState && (
+                  <div className="flex flex-col gap-3">
+                    <LaunchProfileEditor
+                      state={profileState}
+                      onChange={(next) => {
+                        setProfileState(next);
+                        onUpdate({
+                          ...workspace,
+                          launchProfile: buildProfile(next),
+                        });
+                      }}
+                      tools={tools}
+                    />
+                  </div>
+                )}
+              </div>
 
               <div className="border border-line-danger rounded-md p-4 flex flex-col gap-3">
                 <div>
@@ -1341,6 +1437,47 @@ export function WorkspaceDetail({
           onClose={() => setShowCreateWorktree(false)}
         />
       )}
+
+      {showMoveWing && (
+        <div className="modal-overlay" onClick={() => setShowMoveWing(false)}>
+          <div
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 420 }}
+          >
+            <div className="modal-title">Move to another wing</div>
+            <p className="setup-desc" style={{ marginBottom: 12 }}>
+              Move <strong>{workspace.title}</strong> out of this wing.
+            </p>
+            <div className="flex flex-col gap-1 mb-4 max-h-[300px] overflow-y-auto">
+              {allWings
+                .filter((w) => w.id !== wingId)
+                .map((w) => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    className="text-left px-3 py-2 rounded-sm border border-line hover:bg-bg-card-hover text-sm text-fg"
+                    onClick={() => {
+                      onMove(workspace.id, w.id);
+                      setShowMoveWing(false);
+                    }}
+                  >
+                    {w.name}
+                  </button>
+                ))}
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setShowMoveWing(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1356,6 +1493,7 @@ interface LinksTabProps {
   hydrations: Record<string, LinkStatus>;
   hydrationPending: Set<string>;
   onDelete: (id: string) => void;
+  onReorder: (orderedIds: string[]) => void;
 }
 
 const LINK_GROUP_LABELS: Record<string, string> = {
@@ -1381,7 +1519,15 @@ function LinksTab({
   hydrations,
   hydrationPending,
   onDelete,
+  onReorder,
 }: LinksTabProps) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    before: boolean;
+    horizontal: boolean;
+  } | null>(null);
+
   const grouped: Record<string, WorkspaceLink[]> = {
     docs: [],
     tickets: [],
@@ -1393,6 +1539,18 @@ function LinksTab({
   }
   const groupOrder = ["docs", "tickets", "messaging", "other"] as const;
   const populatedGroups = groupOrder.filter((g) => grouped[g].length > 0);
+
+  function handleReorder(draggedId: string, targetId: string, before: boolean) {
+    if (draggedId === targetId) return;
+    const next = [...links];
+    const fromIdx = next.findIndex((l) => l.id === draggedId);
+    const toIdx = next.findIndex((l) => l.id === targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = next.splice(fromIdx, 1);
+    const adjusted = fromIdx < toIdx ? toIdx - 1 : toIdx;
+    next.splice(before ? adjusted : adjusted + 1, 0, moved);
+    onReorder(next.map((l) => l.id));
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -1436,17 +1594,94 @@ function LinksTab({
               <span className="section-count">{grouped[group].length}</span>
             </div>
             <div className="link-list">
-              {grouped[group].map((link) => (
-                <LinkCard
-                  key={link.id}
-                  link={link}
-                  hydration={hydrations[link.url]}
-                  isLoading={
-                    hydrationPending.has(link.url) && !hydrations[link.url]
-                  }
-                  onDelete={() => onDelete(link.id)}
-                />
-              ))}
+              {grouped[group].map((link) => {
+                const isDragging = draggingId === link.id;
+                const showInsertBefore =
+                  draggingId !== null &&
+                  draggingId !== link.id &&
+                  dropTarget?.id === link.id &&
+                  dropTarget.before;
+                const showInsertAfter =
+                  draggingId !== null &&
+                  draggingId !== link.id &&
+                  dropTarget?.id === link.id &&
+                  !dropTarget.before;
+                const horizontal = !!dropTarget?.horizontal;
+                return (
+                  <div
+                    key={link.id}
+                    className="relative h-full"
+                    draggable
+                    onDragStart={() => setDraggingId(link.id)}
+                    onDragEnd={() => {
+                      setDraggingId(null);
+                      setDropTarget(null);
+                    }}
+                    onDragOver={(e) => {
+                      if (!draggingId || draggingId === link.id) return;
+                      e.preventDefault();
+                      const cardEl = e.currentTarget as HTMLElement;
+                      const rect = cardEl.getBoundingClientRect();
+                      // Detect grid layout: any sibling sharing this row's Y?
+                      const parent = cardEl.parentElement;
+                      let isGrid = false;
+                      if (parent) {
+                        for (const sib of parent.children) {
+                          if (sib === cardEl) continue;
+                          const sr = (
+                            sib as HTMLElement
+                          ).getBoundingClientRect();
+                          if (Math.abs(sr.top - rect.top) < 5) {
+                            isGrid = true;
+                            break;
+                          }
+                        }
+                      }
+                      const before = isGrid
+                        ? e.clientX < rect.left + rect.width / 2
+                        : e.clientY < rect.top + rect.height / 2;
+                      setDropTarget({
+                        id: link.id,
+                        before,
+                        horizontal: isGrid,
+                      });
+                    }}
+                    onDrop={(e) => {
+                      if (!draggingId || draggingId === link.id) return;
+                      e.preventDefault();
+                      handleReorder(
+                        draggingId,
+                        link.id,
+                        dropTarget?.before ?? true,
+                      );
+                      setDraggingId(null);
+                      setDropTarget(null);
+                    }}
+                    style={{ opacity: isDragging ? 0.4 : 1 }}
+                  >
+                    {showInsertBefore && horizontal && (
+                      <div className="absolute -left-[5px] top-0 bottom-0 w-0.5 bg-blue rounded-full" />
+                    )}
+                    {showInsertAfter && horizontal && (
+                      <div className="absolute -right-[5px] top-0 bottom-0 w-0.5 bg-blue rounded-full" />
+                    )}
+                    {showInsertBefore && !horizontal && (
+                      <div className="absolute -top-[5px] left-0 right-0 h-0.5 bg-blue rounded-full" />
+                    )}
+                    {showInsertAfter && !horizontal && (
+                      <div className="absolute -bottom-[5px] left-0 right-0 h-0.5 bg-blue rounded-full" />
+                    )}
+                    <LinkCard
+                      link={link}
+                      hydration={hydrations[link.url]}
+                      isLoading={
+                        hydrationPending.has(link.url) && !hydrations[link.url]
+                      }
+                      onDelete={() => onDelete(link.id)}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))
@@ -1530,12 +1765,9 @@ function WorktreePickerButton({
       </button>
       {open && (
         <>
+          <div className="gear-menu-backdrop" onClick={() => setOpen(false)} />
           <div
-            className="gear-menu-backdrop"
-            onClick={() => setOpen(false)}
-          />
-          <div
-            className="absolute top-full left-0 mt-1 z-10 bg-bg-card border border-line rounded-md shadow-[0_4px_16px_rgba(0,0,0,0.3)] flex flex-col"
+            className="absolute top-full left-0 mt-1 z-50 bg-bg-card border border-line rounded-md shadow-[0_4px_16px_rgba(0,0,0,0.3)] flex flex-col"
             style={{ minWidth: 280, maxWidth: 420 }}
           >
             <div className="overflow-y-auto max-h-[280px] py-1">
@@ -1560,8 +1792,7 @@ function WorktreePickerButton({
                       </code>
                       {wt.branch && (
                         <span className="text-xs text-fg-muted">
-                          on{" "}
-                          <code className="text-fg-muted">{wt.branch}</code>
+                          on <code className="text-fg-muted">{wt.branch}</code>
                         </span>
                       )}
                     </div>

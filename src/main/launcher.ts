@@ -5,6 +5,7 @@ import { join } from "path";
 import { shell } from "electron";
 import { getEffectiveLaunchProfile, getWing, updateWorkspace } from "./store";
 import { currentBranch, checkoutBranch } from "./git";
+import { buildWorkspaceContextMarkdown } from "./context";
 import type { LaunchAction, TmuxPane, Workspace } from "../shared/types";
 
 function resolveDir(dir?: string): string | undefined {
@@ -46,13 +47,11 @@ const EDITOR_BINS: Record<string, string[]> = {
 };
 
 export function launchWorkspace(wingId: string, workspace: Workspace): string {
-  const launchProfile = getEffectiveLaunchProfile(wingId);
+  const launchProfile = getEffectiveLaunchProfile(wingId, workspace);
   const sessionName = workspace.tmuxSession ?? workspace.id;
   const wing = getWing(wingId);
 
-  const dir = resolveDir(
-    workspace.worktree?.path ?? wing?.projectDir ?? workspace.directoryPath,
-  );
+  const dir = resolveDir(workspace.worktree?.path ?? wing?.projectDir);
 
   // Spaces with a worktree are isolated: ensure the worktree is on the
   // workspace's focus branch before any shells/editors open. Spaces without
@@ -114,7 +113,8 @@ function launchEditor(
   }).unref();
 
   if (action.app === "code" && action.withClaude) {
-    const md = buildWorkspaceContextMarkdown(workspace, wingId);
+    const wingName = getWing(wingId)?.name ?? wingId;
+    const md = buildWorkspaceContextMarkdown(workspace, wingName, wingId);
     const prompt = `Workspace context for this session:\n\n${md}`;
     const uri = `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`;
     void shell.openExternal(uri);
@@ -339,42 +339,13 @@ function activateApp(app: string): void {
   }
 }
 
-function buildWorkspaceContextMarkdown(
-  workspace: Workspace,
-  wingId: string,
-): string {
-  const wingName = getWing(wingId)?.name ?? wingId;
-  const lines: string[] = [`# ${wingName} / ${workspace.title}`, ""];
-  const todos = workspace.todos ?? [];
-  const pending = todos.filter((t) => !t.done);
-  const done = todos.filter((t) => t.done);
-  if (todos.length > 0) {
-    lines.push("## Todos");
-    pending.forEach((t) => lines.push(`- [ ] ${t.text}`));
-    done.forEach((t) => lines.push(`- [x] ${t.text}`));
-    lines.push("");
-  }
-  const noteItems = Array.isArray(workspace.notes) ? workspace.notes : [];
-  if (noteItems.length > 0) {
-    lines.push("## Notes");
-    noteItems.forEach((n: any) => lines.push(`- ${n.text}`));
-    lines.push("");
-  }
-  if (workspace.prs.length > 0) {
-    lines.push("## Linked PRs");
-    workspace.prs.forEach((p) => lines.push(`- ${p.repo}#${p.number}`));
-    lines.push("");
-  }
-  if (workspace.branch) lines.push("## Branch", workspace.branch, "");
-  return lines.join("\n");
-}
-
 function buildClaudeCommand(
   workspace: Workspace,
   dir: string,
   wingId: string,
 ): string {
-  const md = buildWorkspaceContextMarkdown(workspace, wingId);
+  const wingName = getWing(wingId)?.name ?? wingId;
+  const md = buildWorkspaceContextMarkdown(workspace, wingName, wingId);
   const contextPath = `/tmp/atrium-context-${workspace.id}.md`;
   writeFileSync(contextPath, md, "utf-8");
   const id = workspace.claudeSessionId;

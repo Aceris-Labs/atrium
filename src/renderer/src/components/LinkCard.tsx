@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { ClipboardIcon, CheckIcon } from "@heroicons/react/20/solid";
 import type {
   WorkspaceLink,
   LinkStatus,
@@ -65,13 +67,35 @@ function SourceBadge({ source }: { source: string }) {
 function DeleteButton({ onDelete }: { onDelete: () => void }) {
   return (
     <button
-      className="ml-auto shrink-0 bg-transparent border-none text-fg-muted cursor-pointer opacity-0 group-hover:opacity-100 hover:text-red transition-opacity leading-none px-[2px] text-[15px]"
+      className="shrink-0 bg-transparent border-none text-fg-muted cursor-pointer opacity-0 group-hover:opacity-100 hover:text-red transition-opacity leading-none px-[2px] text-[15px]"
       onClick={(e) => {
         e.stopPropagation();
         onDelete();
       }}
     >
       ×
+    </button>
+  );
+}
+
+function CopyButton({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="shrink-0 w-5 h-5 flex items-center justify-center bg-transparent border-none text-fg-muted cursor-pointer opacity-0 group-hover:opacity-100 hover:text-fg transition-opacity"
+      onClick={async (e) => {
+        e.stopPropagation();
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+      title={copied ? "Copied!" : "Copy URL"}
+    >
+      {copied ? (
+        <CheckIcon className="w-3.5 h-3.5 text-green" />
+      ) : (
+        <ClipboardIcon className="w-3.5 h-3.5" />
+      )}
     </button>
   );
 }
@@ -152,7 +176,8 @@ function StandardCard({
             className="text-xs px-[6px] py-[1px] rounded-sm border bg-bg-input text-fg-muted border-line shrink-0"
             title={`Due ${formatRelative(dueDate)}`}
           >
-            Due {new Date(dueDate).toLocaleDateString(undefined, {
+            Due{" "}
+            {new Date(dueDate).toLocaleDateString(undefined, {
               month: "short",
               day: "numeric",
             })}
@@ -165,6 +190,7 @@ function StandardCard({
             {hydration!.status}
           </span>
         )}
+        <CopyButton url={link.url} />
         <DeleteButton onDelete={onDelete} />
       </div>
 
@@ -178,12 +204,10 @@ function StandardCard({
         {title}
       </div>
 
-      {/* Row 2b: description excerpt */}
-      {hydration?.description && !isError && (
-        <p className="text-xs text-fg-muted italic line-clamp-2 leading-snug">
-          {hydration.description}
-        </p>
-      )}
+      {/* Row 2b: description excerpt — always reserves space for uniform height */}
+      <p className="text-xs text-fg-muted italic line-clamp-2 leading-snug min-h-[2.6em]">
+        {hydration?.description && !isError ? hydration.description : " "}
+      </p>
 
       {/* Row 3: footer (chips left, person+date right) — always rendered */}
       <div className="flex items-center justify-between gap-2 pt-2 border-t border-line mt-auto">
@@ -239,6 +263,7 @@ function FigmaCard({
       <div className="flex items-center gap-2 min-w-0">
         <SourceBadge source={link.source} />
         <div className="flex-1" />
+        <CopyButton url={link.url} />
         <DeleteButton onDelete={onDelete} />
       </div>
 
@@ -307,6 +332,7 @@ function SlackCard({
           </span>
         )}
         <div className="flex-1" />
+        <CopyButton url={link.url} />
         <DeleteButton onDelete={onDelete} />
       </div>
 
@@ -443,7 +469,7 @@ export function LinkCard({
 
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-line bg-bg-card hover:bg-bg-card-hover hover:border-line-hover cursor-pointer transition-colors group relative"
+      className="h-full flex flex-col gap-2 rounded-md border border-line bg-bg-card hover:bg-bg-card-hover hover:border-line-hover cursor-pointer transition-colors group relative"
       style={{ padding: "14px 16px" }}
       onClick={() => window.api.shell.openExternal(link.url)}
       title={errorTooltip}

@@ -195,7 +195,6 @@ body,
   box-shadow: 0 0 0 1px var(--border-hover) 22;
 }
 
-
 /* Card header */
 .card-header {
   @apply flex items-start gap-[10px];
@@ -554,6 +553,13 @@ body,
   @apply text-xs text-fg-muted shrink-0;
 }
 
+.badge.space-badge {
+  @apply max-w-[140px] overflow-hidden text-ellipsis whitespace-nowrap;
+  color: var(--blue);
+  border-color: var(--blue) 44;
+  background: var(--blue) 11;
+}
+
 .pr-card-footer-badges {
   @apply flex gap-1 shrink-0;
 }
@@ -562,6 +568,13 @@ body,
   color: var(--purple);
   border-color: var(--purple) 44;
   background: var(--purple) 11;
+}
+
+.badge.comments-awaiting {
+  color: var(--orange);
+  border-color: var(--orange) 66;
+  background: var(--orange) 22;
+  font-weight: 600;
 }
 
 .badge.ci-pending {
@@ -1154,8 +1167,17 @@ body,
   margin: 0 0 0.5em 1.25em;
   padding: 0;
 }
+.prose-note ul {
+  list-style: disc outside;
+}
+.prose-note ol {
+  list-style: decimal outside;
+}
 .prose-note li {
   margin: 0.15em 0;
+}
+.prose-note li::marker {
+  color: var(--fg-muted);
 }
 .prose-note code {
   @apply bg-bg rounded-sm text-xs px-1 py-px font-mono;

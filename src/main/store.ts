@@ -1,12 +1,5 @@
-import {
-  readFileSync,
-  mkdirSync,
-  existsSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-} from "fs";
-import { writeFile } from "fs/promises";
+import { readFileSync, mkdirSync, existsSync, readdirSync, rmSync } from "fs";
+import { writeFile, rename, unlink } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import type {
@@ -14,65 +7,11 @@ import type {
   AtriumConfig,
   Wing,
   LaunchAction,
-  Item,
-  TodoItem,
-  NoteItem,
 } from "../shared/types";
-
-function firstLineAndRest(text: string): { title: string; body?: string } {
-  const trimmed = text.trim();
-  const newlineIdx = trimmed.indexOf("\n");
-  if (newlineIdx === -1) return { title: trimmed };
-  return {
-    title: trimmed.slice(0, newlineIdx).trim(),
-    body: trimmed.slice(newlineIdx + 1).trim() || undefined,
-  };
-}
-
-/** One-shot migration of legacy todos/notes into the unified Item array.
- *  Returns true if anything changed. */
-function migrateToItems(target: {
-  items?: Item[];
-  todos?: TodoItem[];
-  notes?: NoteItem[];
-  createdAt?: string;
-}): boolean {
-  if (target.items !== undefined) return false; // already migrated
-  const items: Item[] = [];
-  const fallbackTime = target.createdAt ?? new Date().toISOString();
-  for (const t of target.todos ?? []) {
-    items.push({
-      id: t.id,
-      title: t.text,
-      done: t.done,
-      createdAt: fallbackTime,
-      updatedAt: fallbackTime,
-    });
-  }
-  for (const n of target.notes ?? []) {
-    const { title, body } = firstLineAndRest(n.text);
-    items.push({
-      id: n.id,
-      title: title || "(untitled)",
-      body,
-      done: false,
-      createdAt: n.createdAt ?? fallbackTime,
-      updatedAt: n.createdAt ?? fallbackTime,
-    });
-  }
-  target.items = items;
-  delete target.todos;
-  delete target.notes;
-  return true;
-}
 
 const DIR = join(homedir(), ".atrium");
 const CONFIG_FILE = join(DIR, "config.json");
 const WINGS_DIR = join(DIR, "wings");
-
-// Legacy locations (pre-Wing layout) — only read for one-shot migration.
-const LEGACY_WORKSPACES_FILE = join(DIR, "workspaces.json");
-const LEGACY_WATCHED_FILE = join(DIR, "watched-prs.json");
 
 const DEFAULT_LAUNCH_PROFILE: LaunchAction[] = [
   { type: "terminal-tmux", app: "ghostty" },
@@ -95,9 +34,34 @@ function readJson<T>(file: string, fallback: T): T {
   }
 }
 
+/** Like readJson but reports whether the result came from the on-disk file
+ *  (`ok: true`) or the fallback (`ok: false`). Migration paths must use this
+ *  to avoid persisting the fallback over an unreadable original. */
+function readJsonStrict<T>(
+  file: string,
+  fallback: T,
+): { data: T; ok: boolean } {
+  if (!existsSync(file)) return { data: fallback, ok: false };
+  try {
+    return { data: JSON.parse(readFileSync(file, "utf-8")) as T, ok: true };
+  } catch {
+    return { data: fallback, ok: false };
+  }
+}
+
+/** Atomic JSON write: temp file + rename. Prevents partial files on crash
+ *  or interrupt — the original on-disk file is never truncated mid-write. */
 async function writeJson(file: string, data: unknown): Promise<void> {
   ensureDir(DIR);
-  await writeFile(file, JSON.stringify(data, null, 2));
+  const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    await writeFile(tmp, JSON.stringify(data, null, 2));
+    await rename(tmp, file);
+  } catch (e) {
+    // Best-effort cleanup of the temp file; the original is untouched.
+    await unlink(tmp).catch(() => {});
+    throw e;
+  }
 }
 
 function slugify(name: string): string {
@@ -128,70 +92,9 @@ function listWingDirs(): string[] {
 }
 
 // ── Migration ──────────────────────────────────────────────────────────────
-// If pre-Wing files exist and no wings directory yet, fold them into a "Main"
-// wing. Nondestructive: old files are renamed with a `.legacy` suffix rather
-// than deleted, so the user can recover if anything goes wrong.
-function runMigrationIfNeeded(): void {
-  if (existsSync(WINGS_DIR) && listWingDirs().length > 0) return;
-
-  const hasLegacyWorkspaces = existsSync(LEGACY_WORKSPACES_FILE);
-  const hasLegacyWatched = existsSync(LEGACY_WATCHED_FILE);
-  const hasLegacyConfig = existsSync(CONFIG_FILE);
-  if (!hasLegacyWorkspaces && !hasLegacyWatched && !hasLegacyConfig) return;
-
-  const legacyConfig = hasLegacyConfig
-    ? readJson<Record<string, unknown>>(CONFIG_FILE, {})
-    : {};
-  const legacyRootDir = legacyConfig.rootDir as string | undefined;
-  const legacyProfile = legacyConfig.launchProfile as
-    | LaunchAction[]
-    | undefined;
-
-  // Only migrate if there's meaningful legacy data to move.
-  const shouldMigrate =
-    hasLegacyWorkspaces || hasLegacyWatched || legacyRootDir || legacyProfile;
-  if (!shouldMigrate) return;
-
-  const wingId = "main";
-  const dir = wingDir(wingId);
-  ensureDir(dir);
-
-  const wing: Wing = {
-    id: wingId,
-    name: "Main",
-    projectDir: legacyRootDir,
-    launchProfile: undefined, // inherit default
-    createdAt: new Date().toISOString(),
-  };
-  // Migration writes are best-effort fire-and-forget — this code path
-  // runs at most once per installation (old → new wing layout).
-  void writeJson(join(dir, "wing.json"), wing);
-
-  if (hasLegacyWorkspaces) {
-    const workspaces = readJson<Workspace[]>(LEGACY_WORKSPACES_FILE, []);
-    void writeJson(join(dir, "workspaces.json"), workspaces);
-    renameSync(LEGACY_WORKSPACES_FILE, LEGACY_WORKSPACES_FILE + ".legacy");
-  }
-  if (hasLegacyWatched) {
-    const watched = readJson<WatchedPR[]>(LEGACY_WATCHED_FILE, []);
-    void writeJson(join(dir, "watched-prs.json"), watched);
-    renameSync(LEGACY_WATCHED_FILE, LEGACY_WATCHED_FILE + ".legacy");
-  }
-
-  const newConfig: AtriumConfig = {
-    ghPath: (legacyConfig.ghPath as string) ?? "/opt/homebrew/bin/gh",
-    setupComplete: (legacyConfig.setupComplete as boolean) ?? false,
-    defaultLaunchProfile: legacyProfile ?? DEFAULT_LAUNCH_PROFILE,
-    wingOrder: [wingId],
-    activeWingId: wingId,
-  };
-  void writeJson(CONFIG_FILE, newConfig);
-}
-
 // ── Global config ──────────────────────────────────────────────────────────
 export function getConfig(): AtriumConfig {
   ensureDir(DIR);
-  runMigrationIfNeeded();
 
   if (!existsSync(CONFIG_FILE)) {
     return {
@@ -224,31 +127,18 @@ export async function setConfig(
 }
 
 // ── Wings ──────────────────────────────────────────────────────────────────
-function migrateWingData(raw: Record<string, unknown>): Wing {
-  if (raw.rootDir && !raw.projectDir) {
-    raw.projectDir = raw.rootDir;
-    delete raw.rootDir;
-  }
-  const wing = raw as unknown as Wing;
-  if (migrateToItems(wing)) {
-    void writeJson(join(wingDir(wing.id), "wing.json"), wing);
-  }
-  return wing;
-}
-
 export function listWings(): Wing[] {
   const config = getConfig();
-  const order = config.wingOrder;
   const wings: Wing[] = [];
-  for (const id of order) {
+  for (const id of config.wingOrder) {
     const file = join(wingDir(id), "wing.json");
     if (!existsSync(file)) continue;
-    const raw = readJson<Record<string, unknown>>(file, {
-      id,
-      name: id,
-      createdAt: "",
-    });
-    wings.push(migrateWingData(raw));
+    const { data, ok } = readJsonStrict<Wing | null>(file, null);
+    if (!ok || !data) {
+      console.error(`Wing data unreadable at ${file} — skipping.`);
+      continue;
+    }
+    wings.push(data);
   }
   return wings;
 }
@@ -256,9 +146,8 @@ export function listWings(): Wing[] {
 export function getWing(id: string): Wing | null {
   const file = join(wingDir(id), "wing.json");
   if (!existsSync(file)) return null;
-  const raw = readJson<Record<string, unknown> | null>(file, null);
-  if (!raw) return null;
-  return migrateWingData(raw);
+  const { data, ok } = readJsonStrict<Wing | null>(file, null);
+  return ok ? data : null;
 }
 
 export async function createWing(data: {
@@ -324,10 +213,17 @@ export async function setActiveWing(id: string): Promise<void> {
   await setConfig({ activeWingId: id });
 }
 
-export function getEffectiveLaunchProfile(wingId: string): LaunchAction[] {
+export function getEffectiveLaunchProfile(
+  wingId: string,
+  workspace?: { launchProfile?: LaunchAction[] },
+): LaunchAction[] {
   const wing = getWing(wingId);
   const config = getConfig();
-  return wing?.launchProfile ?? config.defaultLaunchProfile;
+  return (
+    workspace?.launchProfile ??
+    wing?.launchProfile ??
+    config.defaultLaunchProfile
+  );
 }
 
 export function getWingProjectDir(wingId: string): string | undefined {
@@ -342,77 +238,12 @@ function workspacesFile(wingId: string): string {
 export function listWorkspaces(wingId: string): Workspace[] {
   const file = workspacesFile(wingId);
   if (!existsSync(file)) return [];
-  const workspaces = readJson<Workspace[]>(file, []);
-  let migrated = false;
-  for (const ws of workspaces) {
-    // Migrate worktreePath → directoryPath (one-shot; worktrees are no longer
-    // a distinct concept — any directory the user picks is a "directoryPath").
-    const legacy = ws as Workspace & { worktreePath?: string };
-    if (legacy.worktreePath !== undefined) {
-      if (!ws.directoryPath) ws.directoryPath = legacy.worktreePath;
-      delete legacy.worktreePath;
-      migrated = true;
-    }
-    // Migrate notes: string → NoteItem[] (intermediate step before unified items)
-    if (typeof ws.notes === "string") {
-      ws.notes = (ws.notes as string).trim()
-        ? [
-            {
-              id: Date.now().toString(36),
-              text: ws.notes as unknown as string,
-              createdAt: ws.createdAt,
-            },
-          ]
-        : [];
-      migrated = true;
-    }
-    // Migrate todos+notes → unified items
-    if (migrateToItems(ws)) migrated = true;
-    if (!ws.links) {
-      ws.links = [];
-      migrated = true;
-    }
-    for (const link of ws.links) {
-      if (!link.category) {
-        const oldType = (link as any).type;
-        if (oldType === "notion") {
-          link.source = "notion";
-          link.category = "docs";
-        } else if (oldType === "linear") {
-          link.source = "linear";
-          link.category = "tickets";
-        } else if (oldType === "github") {
-          link.source = "github";
-          link.category = "other";
-        } else {
-          link.source = link.source ?? "other";
-          link.category = "other";
-        }
-        delete (link as any).type;
-        migrated = true;
-      }
-    }
-    // Migrate prs: number[] → { repo, number }[]. Old entries are attributed
-    // to the workspace's repo; if the workspace has no repo set we can't know
-    // which repo the PR is from, so we drop those entries. Users can re-link.
-    if (
-      Array.isArray(ws.prs) &&
-      ws.prs.length > 0 &&
-      typeof ws.prs[0] === "number"
-    ) {
-      const legacyNumbers = ws.prs as unknown as number[];
-      ws.prs = ws.repo
-        ? legacyNumbers.map((n) => ({ repo: ws.repo!, number: n }))
-        : [];
-      migrated = true;
-    }
-    if (!Array.isArray(ws.prs)) {
-      ws.prs = [];
-      migrated = true;
-    }
+  const { data, ok } = readJsonStrict<Workspace[]>(file, []);
+  if (!ok) {
+    console.error(`Workspaces unreadable at ${file} — returning empty.`);
+    return [];
   }
-  if (migrated) void saveWorkspaces(wingId, workspaces); // best-effort one-time migration write
-  return workspaces;
+  return data;
 }
 
 async function saveWorkspaces(

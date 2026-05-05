@@ -32,6 +32,7 @@ export default function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [myPRs, setMyPRs] = useState<PRStatus[]>([]);
   const [reviewPRs, setReviewPRs] = useState<PRStatus[]>([]);
+  const [reviewedPRs, setReviewedPRs] = useState<PRStatus[]>([]);
   const [tmuxSessions, setTmuxSessions] = useState<string[]>([]);
   const [agentStatuses, setAgentStatuses] = useState<
     Record<string, "working" | "needs-input" | "idle" | "no-session">
@@ -61,7 +62,6 @@ export default function App() {
   async function loadWorkspaces(wingId: string) {
     const ws = await window.api.workspaces.list(wingId);
     setWorkspaces(ws);
-    fetchLinkedPRs(ws);
   }
 
   async function fetchLinkedPRs(workspacesList: Workspace[]) {
@@ -93,13 +93,15 @@ export default function App() {
     syncRef.current = true;
     setSyncing(true);
     try {
-      const [prs, reviews, sessions] = await Promise.all([
+      const [prs, reviews, reviewed, sessions] = await Promise.all([
         window.api.github.myPRs(wingId),
         window.api.github.reviewRequests(wingId),
+        window.api.github.reviewedPRs(wingId),
         window.api.github.tmuxSessions(),
       ]);
       setMyPRs(prs);
       setReviewPRs(reviews);
+      setReviewedPRs(reviewed);
       setTmuxSessions(sessions);
       setLoadingPRs(false);
 
@@ -110,8 +112,7 @@ export default function App() {
         ws.forEach((w) => {
           sessionMap[w.id] = {
             tmuxSession: w.tmuxSession,
-            directoryPath:
-              w.worktree?.path ?? wing?.projectDir ?? w.directoryPath,
+            directoryPath: w.worktree?.path ?? wing?.projectDir,
             claudeSessionId: w.claudeSessionId,
           };
         });
@@ -137,10 +138,7 @@ export default function App() {
           (u): u is NonNullable<typeof u> => u !== null,
         );
         if (updates.length > 0) {
-          const saved = await window.api.workspaces.updateMany(
-            wingId,
-            updates,
-          );
+          const saved = await window.api.workspaces.updateMany(wingId, updates);
           setWorkspaces((prev) => {
             const byId = new Map(saved.map((w) => [w.id, w]));
             return prev.map((w) => byId.get(w.id) ?? w);
@@ -164,8 +162,7 @@ export default function App() {
         ws.forEach((w) => {
           sessionMap[w.id] = {
             tmuxSession: w.tmuxSession,
-            directoryPath:
-              w.worktree?.path ?? wing?.projectDir ?? w.directoryPath,
+            directoryPath: w.worktree?.path ?? wing?.projectDir,
             claudeSessionId: w.claudeSessionId,
           };
         });
@@ -320,9 +317,16 @@ export default function App() {
     syncAll(activeWingId);
     const prInterval = setInterval(() => syncAll(activeWingId), 60_000);
     const agentInterval = setInterval(() => pollAgents(activeWingId), 5_000);
+    // External writes (e.g. via the Atrium MCP server) push a change event;
+    // refresh wing + workspaces so the UI catches up within ~250ms.
+    const unsubData = window.api.events.onDataChanged(() => {
+      reloadWings();
+      loadWorkspaces(activeWingId);
+    });
     return () => {
       clearInterval(prInterval);
       clearInterval(agentInterval);
+      unsubData();
     };
   }, [setupDone, activeWingId, syncAll, pollAgents]);
 
@@ -357,10 +361,7 @@ export default function App() {
     setWings((prev) => prev.map((w) => (w.id === saved.id ? saved : w)));
   }
 
-  async function handleDropItemOnWorkspace(
-    workspace: Workspace,
-    item: Item,
-  ) {
+  async function handleDropItemOnWorkspace(workspace: Workspace, item: Item) {
     if (!activeWing) return;
     // Move item from wing.items → workspace.items
     const remaining = (activeWing.items ?? []).filter((n) => n.id !== item.id);
@@ -414,9 +415,7 @@ export default function App() {
 
   async function bulkUpdate(patch: (ws: Workspace) => Workspace) {
     if (!activeWingId || selectedIds.size === 0) return;
-    const targets = workspaces
-      .filter((w) => selectedIds.has(w.id))
-      .map(patch);
+    const targets = workspaces.filter((w) => selectedIds.has(w.id)).map(patch);
     const saved = await window.api.workspaces.updateMany(activeWingId, targets);
     setWorkspaces((prev) => {
       const byId = new Map(saved.map((w) => [w.id, w]));
@@ -444,7 +443,11 @@ export default function App() {
     if (fromIdx === -1 || toIdx === -1) return;
     ids.splice(fromIdx, 1);
     const adjustedTarget = fromIdx < toIdx ? toIdx - 1 : toIdx;
-    ids.splice(insertBefore ? adjustedTarget : adjustedTarget + 1, 0, draggedId);
+    ids.splice(
+      insertBefore ? adjustedTarget : adjustedTarget + 1,
+      0,
+      draggedId,
+    );
     setWorkspaces((prev) => {
       const byId = new Map(prev.map((w) => [w.id, w]));
       return ids.map((id) => byId.get(id)!).filter(Boolean);
@@ -453,9 +456,7 @@ export default function App() {
       await window.api.workspaces.reorder(activeWingId, ids);
     } catch (e) {
       console.error("Reorder failed", e);
-      alert(
-        "Reorder failed: " + (e instanceof Error ? e.message : String(e)),
-      );
+      alert("Reorder failed: " + (e instanceof Error ? e.message : String(e)));
       // Roll back local state by re-listing from disk
       const fresh = await window.api.workspaces.list(activeWingId);
       setWorkspaces(fresh);
@@ -469,9 +470,7 @@ export default function App() {
       await window.api.workspaces.deleteMany(activeWingId, ids);
     } catch (e) {
       console.error("Bulk delete failed", e);
-      alert(
-        "Delete failed: " + (e instanceof Error ? e.message : String(e)),
-      );
+      alert("Delete failed: " + (e instanceof Error ? e.message : String(e)));
       return;
     }
     setWorkspaces((prev) => prev.filter((w) => !selectedIds.has(w.id)));
@@ -495,6 +494,14 @@ export default function App() {
 
   function prKey(pr: PRStatus): string {
     return `${pr.repo ?? ""}-${pr.number}`;
+  }
+
+  // Map prKey → space title for the "in space" badge on PR cards.
+  const prSpaceTitles = new Map<string, string>();
+  for (const w of workspaces) {
+    for (const p of w.prs) {
+      prSpaceTitles.set(`${p.repo}-${p.number}`, w.title);
+    }
   }
 
   const selectedWorkspace = selectedId
@@ -689,6 +696,9 @@ export default function App() {
                       <PRsPanel
                         unlinkedReviews={openReviews}
                         unlinkedMyPRs={openMyPRs}
+                        reviewedPRs={reviewedPRs.filter(
+                          (pr) => pr.state === "open",
+                        )}
                         watchedPRStatuses={watchedPRStatuses}
                         loadingWatched={loadingWatched}
                         loading={loadingPRs}
@@ -697,6 +707,7 @@ export default function App() {
                         onWatchClick={() => setShowWatchModal(true)}
                         onRemoveWatched={handleRemoveWatched}
                         prKey={prKey}
+                        spaceTitleFor={(pr) => prSpaceTitles.get(prKey(pr))}
                       />
                     ) : (
                       <div className="h-[calc(100vh-260px)] min-h-[400px]">
@@ -789,6 +800,7 @@ function TabButton({
 interface PRsPanelProps {
   unlinkedReviews: PRStatus[];
   unlinkedMyPRs: PRStatus[];
+  reviewedPRs: PRStatus[];
   watchedPRStatuses: PRStatus[];
   loadingWatched: WorkspacePR[];
   loading: boolean;
@@ -797,11 +809,13 @@ interface PRsPanelProps {
   onWatchClick: () => void;
   onRemoveWatched: (num: number) => void;
   prKey: (pr: PRStatus) => string;
+  spaceTitleFor: (pr: PRStatus) => string | undefined;
 }
 
 function PRsPanel({
   unlinkedReviews,
   unlinkedMyPRs,
+  reviewedPRs,
   watchedPRStatuses,
   loadingWatched,
   loading,
@@ -810,9 +824,49 @@ function PRsPanel({
   onWatchClick,
   onRemoveWatched,
   prKey,
+  spaceTitleFor,
 }: PRsPanelProps) {
+  // Aggregate PRs awaiting your reply across review-requested, your-PRs, and watched.
+  const awaitingReply = (() => {
+    const seen = new Set<string>();
+    const out: PRStatus[] = [];
+    for (const pr of [
+      ...unlinkedReviews,
+      ...unlinkedMyPRs,
+      ...reviewedPRs,
+      ...watchedPRStatuses,
+    ]) {
+      if ((pr.threadsAwaitingYou ?? 0) === 0) continue;
+      if (pr.isDraft) continue;
+      const k = prKey(pr);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(pr);
+    }
+    return out;
+  })();
+
   return (
     <div className="flex flex-col gap-7">
+      <PRSection
+        title="Awaiting your reply"
+        count={loading ? undefined : awaitingReply.length}
+        loading={loading}
+        emptyMessage="No threads waiting on you."
+      >
+        {awaitingReply.map((pr) => (
+          <PRCard
+            key={prKey(pr)}
+            pr={pr}
+            spaceTitle={spaceTitleFor(pr)}
+            dragging={draggingPR?.number === pr.number}
+            onDragStart={() => setDraggingPR(pr)}
+            onDragEnd={() => setDraggingPR(null)}
+            onClick={() => window.api.shell.openExternal(pr.url)}
+          />
+        ))}
+      </PRSection>
+
       <PRSection
         title="Needs your review"
         count={loading ? undefined : unlinkedReviews.length}
@@ -823,6 +877,7 @@ function PRsPanel({
           <PRCard
             key={prKey(pr)}
             pr={pr}
+            spaceTitle={spaceTitleFor(pr)}
             dragging={draggingPR?.number === pr.number}
             onDragStart={() => setDraggingPR(pr)}
             onDragEnd={() => setDraggingPR(null)}
@@ -841,6 +896,7 @@ function PRsPanel({
           <PRCard
             key={prKey(pr)}
             pr={pr}
+            spaceTitle={spaceTitleFor(pr)}
             dragging={draggingPR?.number === pr.number}
             onDragStart={() => setDraggingPR(pr)}
             onDragEnd={() => setDraggingPR(null)}
@@ -864,6 +920,7 @@ function PRsPanel({
           <div key={prKey(pr)} className="detail-pr-card-wrapper">
             <PRCard
               pr={pr}
+              spaceTitle={spaceTitleFor(pr)}
               dragging={draggingPR?.number === pr.number}
               onDragStart={() => setDraggingPR(pr)}
               onDragEnd={() => setDraggingPR(null)}
@@ -915,9 +972,7 @@ function PRSection({
         <span className="text-base font-bold text-fg-muted uppercase tracking-[0.08em]">
           {title}
         </span>
-        {count !== undefined && (
-          <span className="section-count">{count}</span>
-        )}
+        {count !== undefined && <span className="section-count">{count}</span>}
         {action && <div className="ml-auto">{action}</div>}
       </div>
       {loading && !hasChildren ? (

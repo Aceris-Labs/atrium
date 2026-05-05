@@ -32,6 +32,7 @@ import { homedir } from "os";
 import {
   listMyPRs,
   listReviewRequests,
+  listReviewedPRs,
   listTmuxSessions,
   fetchPR,
   getDefaultRepo,
@@ -121,9 +122,8 @@ export function registerIpcHandlers(): void {
     (_, wingId: string, updates: Workspace[]) =>
       updateWorkspaces(wingId, updates),
   );
-  ipcMain.handle(
-    "workspaces:deleteMany",
-    (_, wingId: string, ids: string[]) => deleteWorkspaces(wingId, ids),
+  ipcMain.handle("workspaces:deleteMany", (_, wingId: string, ids: string[]) =>
+    deleteWorkspaces(wingId, ids),
   );
   ipcMain.handle(
     "workspaces:reorder",
@@ -140,6 +140,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("github:myPRs", (_, wingId: string) => listMyPRs(wingId));
   ipcMain.handle("github:reviewRequests", (_, wingId: string) =>
     listReviewRequests(wingId),
+  );
+  ipcMain.handle("github:reviewedPRs", (_, wingId: string) =>
+    listReviewedPRs(wingId),
   );
   ipcMain.handle("github:tmuxSessions", () => listTmuxSessions());
   ipcMain.handle("github:fetchPR", (_, repo: string, number: number) =>
@@ -282,9 +285,8 @@ export function registerIpcHandlers(): void {
       getAgentStatuses(sessions),
   );
   ipcMain.handle("agents:sessions", () => listAvailableSessions());
-  ipcMain.handle(
-    "agents:recap",
-    (_, info: AgentSessionInfo | undefined) => getSessionRecap(info),
+  ipcMain.handle("agents:recap", (_, info: AgentSessionInfo | undefined) =>
+    getSessionRecap(info),
   );
 
   // ── Watched PRs (wing-scoped) ────────────────────────────────────────────

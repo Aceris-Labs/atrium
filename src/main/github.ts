@@ -14,6 +14,7 @@ async function gql(searchQuery: string): Promise<PRStatus[]> {
 
   const query = `
     query {
+      viewer { login }
       search(query: "${searchQuery}", type: ISSUE, first: 50) {
         edges {
           node {
@@ -32,7 +33,12 @@ async function gql(searchQuery: string): Promise<PRStatus[]> {
               }
               reviewThreads(first: 100) {
                 totalCount
-                nodes { isResolved }
+                nodes {
+                  isResolved
+                  comments(last: 1) {
+                    nodes { author { login } }
+                  }
+                }
               }
             }
           }
@@ -49,10 +55,11 @@ async function gql(searchQuery: string): Promise<PRStatus[]> {
       `query=${query}`,
     ]);
     const data = JSON.parse(stdout);
+    const viewerLogin: string | null = data.data.viewer?.login ?? null;
     return data.data.search.edges
       .map((e: any) => e.node)
       .filter((n: any) => n?.number != null)
-      .map(mapNode);
+      .map((n: any) => mapNode(n, viewerLogin));
   } catch {
     return [];
   }
@@ -64,6 +71,13 @@ export async function listMyPRs(wingId: string): Promise<PRStatus[]> {
 
 export async function listReviewRequests(wingId: string): Promise<PRStatus[]> {
   return scopedPRQuery(wingId, "is:pr is:open review-requested:@me");
+}
+
+/** PRs the viewer has commented on or reviewed (but isn't necessarily a
+ *  current requested reviewer). Used to surface threads awaiting reply on
+ *  PRs the user voluntarily reviewed. */
+export async function listReviewedPRs(wingId: string): Promise<PRStatus[]> {
+  return scopedPRQuery(wingId, "is:pr is:open reviewed-by:@me -author:@me");
 }
 
 async function scopedPRQuery(
@@ -79,12 +93,9 @@ async function scopedPRQuery(
   const repos = await getReposInDirectory(rootDir);
   if (repos.length === 0) return [];
 
-  // If all repos share the same owner, use `org:` (cleaner, handles forks).
-  const owners = [...new Set(repos.map((r) => r.repo.split("/")[0]))];
-  const scope =
-    owners.length === 1
-      ? ` org:${owners[0]}`
-      : " " + repos.map((r) => `repo:${r.repo}`).join(" ");
+  // Always scope to the exact repos in the wing dir — using `org:` would
+  // pull in PRs from sibling repos that aren't part of this wing.
+  const scope = " " + repos.map((r) => `repo:${r.repo}`).join(" ");
   return gql(baseQuery + scope);
 }
 
@@ -192,11 +203,18 @@ export async function listTmuxSessions(): Promise<string[]> {
   }
 }
 
-function mapNode(node: any): PRStatus {
+function mapNode(node: any, viewerLogin: string | null): PRStatus {
   const ciState =
     node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null;
   const threads = node.reviewThreads?.nodes ?? [];
-  const openComments = threads.filter((t: any) => !t.isResolved).length;
+  const unresolvedThreads = threads.filter((t: any) => !t.isResolved);
+  const openComments = unresolvedThreads.length;
+  const threadsAwaitingYou = viewerLogin
+    ? unresolvedThreads.filter((t: any) => {
+        const lastAuthor = t.comments?.nodes?.[0]?.author?.login;
+        return lastAuthor && lastAuthor !== viewerLogin;
+      }).length
+    : 0;
   return {
     number: node.number,
     title: node.title,
@@ -206,6 +224,7 @@ function mapNode(node: any): PRStatus {
     ciStatus: mapCIState(ciState),
     reviewDecision: node.reviewDecision ?? null,
     openComments,
+    threadsAwaitingYou,
     mergeState: node.mergeStateStatus ?? undefined,
     autoMerge: !!node.autoMergeRequest,
     author: node.author?.login,

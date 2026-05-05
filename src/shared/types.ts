@@ -22,18 +22,13 @@ export interface Workspace {
   groupId?: string; // if set, pinned to a custom group; otherwise auto-bucketed by status
   repo?: string; // "owner/repo" — the primary/default repo for this workspace
   branch?: string;
-  /** @deprecated — legacy field; use wing.projectDir or worktree.path instead */
-  directoryPath?: string;
   worktree?: Worktree;
   prs: WorkspacePR[]; // PRs tracked by this workspace (repo-qualified)
   tmuxSession?: string; // linked tmux session name (for agent status tracking)
   claudeSessionId?: string; // Claude Code session UUID (captured after first launch; used for --resume)
-  /** Unified checkable items. Replaces the old todos+notes split. */
+  /** Per-space launch profile override. If unset, falls back to wing.launchProfile, then config.defaultLaunchProfile. */
+  launchProfile?: LaunchAction[];
   items: Item[];
-  /** @deprecated migrated to items — left in JSON until storage strips it. */
-  todos?: TodoItem[];
-  /** @deprecated migrated to items — left in JSON until storage strips it. */
-  notes?: NoteItem[];
   links: WorkspaceLink[];
   about?: string; // user-written description
   digest?: WorkspaceDigest; // agent-generated summary
@@ -52,6 +47,8 @@ export interface PRStatus {
   ciStatus: "pending" | "success" | "failure" | "unknown";
   reviewDecision: "APPROVED" | "REVIEW_REQUIRED" | "CHANGES_REQUESTED" | null;
   openComments: number;
+  /** Unresolved review threads where the latest comment isn't from you. */
+  threadsAwaitingYou?: number;
   mergeState?:
     | "CLEAN"
     | "BLOCKED"
@@ -73,20 +70,6 @@ export interface Item {
   done: boolean;
   createdAt: string;
   updatedAt: string;
-}
-
-/** @deprecated migrated into `Item` — kept for one-shot data migration only */
-export interface TodoItem {
-  id: string;
-  text: string;
-  done: boolean;
-}
-
-/** @deprecated migrated into `Item` — kept for one-shot data migration only */
-export interface NoteItem {
-  id: string;
-  text: string;
-  createdAt: string;
 }
 
 export type LinkCategory = "docs" | "tickets" | "other";
@@ -274,8 +257,6 @@ export interface Wing {
   groupOrder?: string[];
   /** Wing-level items (not associated with any space). Drag onto a space to move it there. */
   items?: Item[];
-  /** @deprecated migrated to items */
-  notes?: NoteItem[];
   createdAt: string;
 }
 
@@ -363,6 +344,7 @@ export type WindowApi = {
   github: {
     myPRs: (wingId: string) => Promise<PRStatus[]>;
     reviewRequests: (wingId: string) => Promise<PRStatus[]>;
+    reviewedPRs: (wingId: string) => Promise<PRStatus[]>;
     tmuxSessions: () => Promise<string[]>;
     fetchPR: (repo: string, number: number) => Promise<PRStatus | null>;
     defaultRepo: (wingId: string) => Promise<string | null>;
@@ -404,6 +386,11 @@ export type WindowApi = {
   };
   shell: {
     openExternal: (url: string) => Promise<void>;
+  };
+  events: {
+    /** Fired when ~/.atrium/wings changes on disk (e.g. an MCP-connected agent
+     *  edited workspace data). Returns an unsubscribe function. */
+    onDataChanged: (handler: () => void) => () => void;
   };
   watchedPRs: {
     list: (wingId: string) => Promise<{ number: number; repo: string }[]>;

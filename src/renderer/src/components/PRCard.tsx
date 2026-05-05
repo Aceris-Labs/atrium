@@ -3,6 +3,8 @@ import type { PRStatus } from "../../../shared/types";
 interface Props {
   pr: PRStatus;
   tag?: "review" | "watching" | "mine";
+  /** Title of the space this PR is associated with, if any. */
+  spaceTitle?: string;
   dragging?: boolean;
   onDragStart?: () => void;
   onDragEnd?: () => void;
@@ -46,6 +48,7 @@ const MERGE_BADGE: Record<string, { label: string; cls: string } | null> = {
 export function PRCard({
   pr,
   tag,
+  spaceTitle,
   dragging,
   onDragStart,
   onDragEnd,
@@ -69,6 +72,14 @@ export function PRCard({
           )}
         </span>
         <div className="pr-card-badges">
+          {spaceTitle && (
+            <span
+              className="badge space-badge"
+              title={`In space: ${spaceTitle}`}
+            >
+              {spaceTitle}
+            </span>
+          )}
           {pr.state === "merged" && (
             <span className="badge merged">merged</span>
           )}
@@ -99,8 +110,18 @@ export function PRCard({
       <div className="pr-card-footer">
         <span className="pr-card-repo">{pr.repo ?? ""}</span>
         <div className="pr-card-footer-badges">
-          {pr.state === "open" && pr.openComments > 0 && (
-            <span className="badge comments-badge">💬 {pr.openComments}</span>
+          {pr.state === "open" && (pr.threadsAwaitingYou ?? 0) > 0 ? (
+            <span
+              className="badge comments-awaiting"
+              title={`${pr.threadsAwaitingYou} thread${pr.threadsAwaitingYou === 1 ? "" : "s"} awaiting your reply`}
+            >
+              ↩ {pr.threadsAwaitingYou}
+            </span>
+          ) : (
+            pr.state === "open" &&
+            pr.openComments > 0 && (
+              <span className="badge comments-badge">💬 {pr.openComments}</span>
+            )
           )}
           {pr.state === "open" && mergeBadge && (
             <span className={`badge ${mergeBadge.cls}`}>

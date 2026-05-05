@@ -41,15 +41,14 @@ export function ItemsTab({
   onItemDragStart,
   onItemDragEnd,
 }: ItemsTabProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(
-    items.find((i) => !i.done)?.id ?? items[0]?.id ?? null,
-  );
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [insertBeforeId, setInsertBeforeId] = useState<string | null>(null);
+  const [autoFocusId, setAutoFocusId] = useState<string | null>(null);
 
-  const selected = selectedId
-    ? items.find((i) => i.id === selectedId) ?? null
+  const expanded = expandedId
+    ? (items.find((i) => i.id === expandedId) ?? null)
     : null;
 
   const active = items.filter((i) => !i.done);
@@ -65,7 +64,7 @@ export function ItemsTab({
       updatedAt: now,
     };
     onChange([item, ...items]);
-    setSelectedId(item.id);
+    setAutoFocusId(item.id);
   }
 
   function handleUpdate(id: string, patch: Partial<Item>) {
@@ -80,10 +79,7 @@ export function ItemsTab({
 
   function handleDelete(id: string) {
     onChange(items.filter((i) => i.id !== id));
-    if (selectedId === id) {
-      const next = active.find((i) => i.id !== id) ?? done.find((i) => i.id !== id);
-      setSelectedId(next?.id ?? null);
-    }
+    if (expandedId === id) setExpandedId(null);
   }
 
   function handleReorder(draggedId: string, targetId: string, before: boolean) {
@@ -100,8 +96,10 @@ export function ItemsTab({
 
   return (
     <div className="flex h-full gap-5 min-h-0">
-      {/* Left: list */}
-      <div className="w-[340px] shrink-0 flex flex-col min-h-0">
+      {/* Left: list — full width when no detail open */}
+      <div
+        className={`${expanded ? "w-[420px] shrink-0" : "flex-1"} flex flex-col min-h-0`}
+      >
         <div className="flex items-center mb-3">
           <button
             className="btn btn-primary btn-sm flex items-center gap-1"
@@ -133,13 +131,17 @@ export function ItemsTab({
             <ItemRow
               key={item.id}
               item={item}
-              selected={selectedId === item.id}
+              expanded={expandedId === item.id}
               dragging={draggingId === item.id}
               insertLineBefore={insertBeforeId === item.id}
-              onClick={() => setSelectedId(item.id)}
-              onToggleDone={() =>
-                handleUpdate(item.id, { done: !item.done })
+              autoFocus={autoFocusId === item.id}
+              onAutoFocused={() => setAutoFocusId(null)}
+              onTitleChange={(title) => handleUpdate(item.id, { title })}
+              onToggleDone={() => handleUpdate(item.id, { done: !item.done })}
+              onToggleExpand={() =>
+                setExpandedId((prev) => (prev === item.id ? null : item.id))
               }
+              onDelete={() => handleDelete(item.id)}
               onDragStart={() => {
                 setDraggingId(item.id);
                 onItemDragStart?.(item);
@@ -156,7 +158,6 @@ export function ItemsTab({
                 const before = e.clientY < rect.top + rect.height / 2;
                 setInsertBeforeId(before ? item.id : null);
                 if (!before) {
-                  // mark "after" by setting next item's before-position
                   const idx = active.findIndex((i) => i.id === item.id);
                   const nextItem = active[idx + 1];
                   setInsertBeforeId(nextItem?.id ?? "__active_end__");
@@ -167,7 +168,6 @@ export function ItemsTab({
                 e.preventDefault();
                 const target = insertBeforeId ?? item.id;
                 if (target === "__active_end__") {
-                  // append to end of active group
                   const lastActive = active[active.length - 1];
                   if (lastActive)
                     handleReorder(draggingId, lastActive.id, false);
@@ -199,44 +199,47 @@ export function ItemsTab({
               <ItemRow
                 key={item.id}
                 item={item}
-                selected={selectedId === item.id}
+                expanded={expandedId === item.id}
                 dragging={false}
                 insertLineBefore={false}
-                onClick={() => setSelectedId(item.id)}
-                onToggleDone={() =>
-                  handleUpdate(item.id, { done: !item.done })
+                onTitleChange={(title) => handleUpdate(item.id, { title })}
+                onToggleDone={() => handleUpdate(item.id, { done: !item.done })}
+                onToggleExpand={() =>
+                  setExpandedId((prev) => (prev === item.id ? null : item.id))
                 }
+                onDelete={() => handleDelete(item.id)}
               />
             ))}
         </div>
       </div>
 
-      {/* Right: detail panel */}
-      <div className="flex-1 min-w-0 min-h-0">
-        {selected ? (
+      {/* Right: detail panel — only when explicitly expanded */}
+      {expanded && (
+        <div className="flex-1 min-w-0 min-h-0">
           <ItemDetailPanel
-            key={selected.id}
-            item={selected}
-            onUpdate={(patch) => handleUpdate(selected.id, patch)}
-            onDelete={() => handleDelete(selected.id)}
+            key={expanded.id}
+            item={expanded}
+            onUpdate={(patch) => handleUpdate(expanded.id, patch)}
+            onDelete={() => handleDelete(expanded.id)}
+            onClose={() => setExpandedId(null)}
           />
-        ) : (
-          <div className="h-full flex items-center justify-center text-fg-muted text-sm italic">
-            Select an item, or click + New item to add one.
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
 
 interface ItemRowProps {
   item: Item;
-  selected: boolean;
+  expanded: boolean;
   dragging: boolean;
   insertLineBefore: boolean;
-  onClick: () => void;
+  autoFocus?: boolean;
+  onAutoFocused?: () => void;
+  onTitleChange: (title: string) => void;
   onToggleDone: () => void;
+  onToggleExpand: () => void;
+  onDelete: () => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
   onDragOver?: (e: React.DragEvent) => void;
@@ -245,24 +248,51 @@ interface ItemRowProps {
 
 function ItemRow({
   item,
-  selected,
+  expanded,
   dragging,
   insertLineBefore,
-  onClick,
+  autoFocus,
+  onAutoFocused,
+  onTitleChange,
   onToggleDone,
+  onToggleExpand,
+  onDelete,
   onDragStart,
   onDragEnd,
   onDragOver,
   onDrop,
 }: ItemRowProps) {
   const draggable = !!onDragStart;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setDraft(item.title);
+  }, [item.title]);
+
+  useEffect(() => {
+    if (autoFocus) {
+      setEditing(true);
+      onAutoFocused?.();
+    }
+  }, [autoFocus, onAutoFocused]);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  function commit() {
+    const t = draft.trim();
+    if (t !== item.title) onTitleChange(t);
+    setEditing(false);
+  }
+
   return (
     <>
-      {insertLineBefore && (
-        <div className="h-0.5 bg-blue rounded-full mx-1" />
-      )}
+      {insertLineBefore && <div className="h-0.5 bg-blue rounded-full mx-1" />}
       <div
-        draggable={draggable}
+        draggable={draggable && !editing}
         onDragStart={(e) => {
           e.stopPropagation();
           onDragStart?.();
@@ -270,36 +300,71 @@ function ItemRow({
         onDragEnd={onDragEnd}
         onDragOver={onDragOver}
         onDrop={onDrop}
-        onClick={onClick}
-        className={`group flex items-start gap-2 px-2 py-2 rounded-md cursor-pointer transition-colors ${
-          selected
+        onClick={() => {
+          if (!editing) onToggleExpand();
+        }}
+        className={`group flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors cursor-pointer ${
+          expanded
             ? "bg-bg-card-hover border border-blue"
             : "border border-transparent hover:bg-bg-card-hover"
         } ${dragging ? "opacity-40" : ""}`}
       >
         {draggable && (
-          <Bars3Icon className="w-3.5 h-3.5 text-fg-muted opacity-0 group-hover:opacity-60 mt-0.5 shrink-0 cursor-grab" />
+          <Bars3Icon className="w-3.5 h-3.5 text-fg-muted opacity-0 group-hover:opacity-60 shrink-0 cursor-grab" />
         )}
-        <div onClick={(e) => e.stopPropagation()} className="mt-0.5">
+        <div onClick={(e) => e.stopPropagation()}>
           <Checkbox checked={item.done} onChange={onToggleDone} />
         </div>
-        <div className="flex-1 min-w-0">
-          <div
-            className={`text-sm truncate ${item.done ? "line-through text-fg-muted" : "text-fg"}`}
-          >
-            {item.title || (
-              <span className="italic text-fg-muted">(untitled)</span>
-            )}
-          </div>
-        </div>
-        {item.body && (
+        {editing ? (
+          <input
+            ref={inputRef}
+            className={`flex-1 min-w-0 bg-transparent border-none outline-none text-sm ${
+              item.done ? "line-through text-fg-muted" : "text-fg"
+            }`}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                (e.target as HTMLInputElement).blur();
+              }
+              if (e.key === "Escape") {
+                setDraft(item.title);
+                setEditing(false);
+              }
+            }}
+            placeholder="(untitled)"
+          />
+        ) : (
           <span
-            className="text-fg-muted text-xs shrink-0 mt-0.5"
-            title="Has notes"
+            onClick={(e) => {
+              e.stopPropagation();
+              setEditing(true);
+            }}
+            className={`flex-1 min-w-0 text-sm truncate cursor-text ${
+              item.done ? "line-through text-fg-muted" : "text-fg"
+            } ${!item.title ? "italic text-fg-muted" : ""}`}
           >
+            {item.title || "(untitled)"}
+          </span>
+        )}
+        {item.body && (
+          <span className="text-fg-muted text-xs shrink-0" title="Has notes">
             ¶
           </span>
         )}
+        <button
+          className="shrink-0 w-6 h-6 flex items-center justify-center rounded text-fg-muted hover:text-red hover:bg-bg-card opacity-0 group-hover:opacity-60 transition-opacity"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Delete item"
+        >
+          <TrashIcon className="w-3.5 h-3.5" />
+        </button>
       </div>
     </>
   );
@@ -309,16 +374,21 @@ interface ItemDetailPanelProps {
   item: Item;
   onUpdate: (patch: Partial<Item>) => void;
   onDelete: () => void;
+  onClose: () => void;
 }
 
-function ItemDetailPanel({ item, onUpdate, onDelete }: ItemDetailPanelProps) {
+function ItemDetailPanel({
+  item,
+  onUpdate,
+  onDelete,
+  onClose,
+}: ItemDetailPanelProps) {
   const [titleDraft, setTitleDraft] = useState(item.title);
   const [bodyDraft, setBodyDraft] = useState(item.body ?? "");
   const [editingBody, setEditingBody] = useState(!item.body);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
-  // Reset drafts when the selected item changes
   useEffect(() => {
     setTitleDraft(item.title);
     setBodyDraft(item.body ?? "");
@@ -340,7 +410,6 @@ function ItemDetailPanel({ item, onUpdate, onDelete }: ItemDetailPanelProps) {
 
   return (
     <div className="h-full flex flex-col bg-bg-card border border-line rounded-md overflow-hidden">
-      {/* Header: checkbox + title + delete */}
       <div className="flex items-center gap-3 px-5 py-4 border-b border-line">
         <Checkbox
           checked={item.done}
@@ -362,8 +431,6 @@ function ItemDetailPanel({ item, onUpdate, onDelete }: ItemDetailPanelProps) {
             }
           }}
           placeholder="Item title"
-          // eslint-disable-next-line jsx-a11y/no-autofocus
-          autoFocus={!item.title}
         />
         {confirmDelete ? (
           <div className="flex items-center gap-1">
@@ -386,17 +453,25 @@ function ItemDetailPanel({ item, onUpdate, onDelete }: ItemDetailPanelProps) {
             </button>
           </div>
         ) : (
-          <button
-            className="text-fg-muted hover:text-red w-7 h-7 flex items-center justify-center rounded hover:bg-bg-card-hover"
-            onClick={() => setConfirmDelete(true)}
-            title="Delete item"
-          >
-            <TrashIcon className="w-4 h-4" />
-          </button>
+          <>
+            <button
+              className="text-fg-muted hover:text-red w-7 h-7 flex items-center justify-center rounded hover:bg-bg-card-hover"
+              onClick={() => setConfirmDelete(true)}
+              title="Delete item"
+            >
+              <TrashIcon className="w-4 h-4" />
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={onClose}
+              title="Close detail"
+            >
+              Close
+            </button>
+          </>
         )}
       </div>
 
-      {/* Body: markdown preview / edit */}
       <div className="flex-1 overflow-y-auto p-5">
         {editingBody ? (
           <textarea
@@ -416,6 +491,8 @@ function ItemDetailPanel({ item, onUpdate, onDelete }: ItemDetailPanelProps) {
               }
             }}
             placeholder="Add notes for this item… (markdown supported, ⌘↩ to save)"
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
           />
         ) : item.body ? (
           <div
@@ -441,7 +518,6 @@ function ItemDetailPanel({ item, onUpdate, onDelete }: ItemDetailPanelProps) {
         )}
       </div>
 
-      {/* Footer: timestamps */}
       <div className="border-t border-line px-5 py-2 text-xs text-fg-muted flex items-center gap-3">
         <span>Created {formatRelative(item.createdAt)}</span>
         {item.updatedAt !== item.createdAt && (

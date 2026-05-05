@@ -5,12 +5,16 @@
   "productName": "Atrium",
   "author": "Evan Wheeler",
   "main": "./out/main/index.js",
+  "bin": {
+    "atrium-mcp": "./out/mcp/atrium-mcp.mjs"
+  },
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && npm run build:mcp",
+    "build:mcp": "esbuild src/mcp/server.ts --bundle --platform=node --format=esm --outfile=out/mcp/atrium-mcp.mjs --banner:js='#!/usr/bin/env node' --target=node18 && chmod +x out/mcp/atrium-mcp.mjs",
     "preview": "electron-vite preview",
-    "package": "electron-vite build && electron-builder --mac --dir",
-    "dist": "electron-vite build && electron-builder --mac"
+    "package": "npm run build && electron-builder --mac --dir",
+    "dist": "npm run build && electron-builder --mac"
   },
   "build": {
     "appId": "com.atrium.app",

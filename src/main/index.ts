@@ -2,8 +2,10 @@ import { app, BrowserWindow, globalShortcut } from "electron";
 import { join } from "path";
 import { registerIpcHandlers } from "./ipc";
 import { closeAllMcpClients } from "./mcp/client";
+import { startWingsWatcher } from "./wingsWatcher";
 
 let mainWindow: BrowserWindow | null = null;
+let wingsWatcher: { stop: () => void } | null = null;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -35,6 +37,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   registerIpcHandlers();
   createWindow();
+  wingsWatcher = startWingsWatcher(() => mainWindow);
 
   globalShortcut.register("CommandOrControl+Shift+O", () => {
     if (!mainWindow) {
@@ -62,4 +65,5 @@ app.on("activate", () => {
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   closeAllMcpClients();
+  wingsWatcher?.stop();
 });

@@ -32,16 +32,17 @@ function buildPrompt(
           .join("\n")
       : "None";
 
-  const todos = workspace.todos ?? [];
-  const doneCount = todos.filter((t) => t.done).length;
-  const todoLines =
-    todos.length > 0
-      ? todos.map((t) => `- [${t.done ? "x" : " "}] ${t.text}`).join("\n")
+  const items = workspace.items ?? [];
+  const doneCount = items.filter((i) => i.done).length;
+  const itemLines =
+    items.length > 0
+      ? items
+          .map((i) => {
+            const head = `- [${i.done ? "x" : " "}] ${i.title}`;
+            return i.body ? `${head}\n  ${i.body.replace(/\n/g, "\n  ")}` : head;
+          })
+          .join("\n")
       : "None";
-
-  const notes = workspace.notes ?? [];
-  const noteLines =
-    notes.length > 0 ? notes.map((n) => `- ${n.text}`).join("\n") : "None";
 
   const links = workspace.links ?? [];
   const linkLines =
@@ -68,16 +69,13 @@ function buildPrompt(
 ${linkInstruction}
 Workspace: "${workspace.title}" (${workspace.type}, ${workspace.status})
 Branch: ${workspace.branch || "none"}
-Directory: ${workspace.directoryPath || "none"}
+Directory: ${workspace.worktree?.path ?? "none"}
 
 Pull Requests:
 ${prLines}
 
-Todos (${doneCount}/${todos.length} done):
-${todoLines}
-
-Notes:
-${noteLines}
+Items (${doneCount}/${items.length} done):
+${itemLines}
 
 Links:
 ${linkLines}
@@ -120,17 +118,13 @@ function buildWingPrompt(
             .join("\n")
         : "  None";
 
-    const todos = workspace.todos ?? [];
-    const doneCount = todos.filter((t) => t.done).length;
-    const todoLines =
-      todos.length > 0
-        ? todos.map((t) => `  - [${t.done ? "x" : " "}] ${t.text}`).join("\n")
-        : "  None";
-
-    const notes = workspace.notes ?? [];
-    const noteLines =
-      notes.length > 0
-        ? notes.map((n) => `  - ${n.text}`).join("\n")
+    const items = workspace.items ?? [];
+    const doneCount = items.filter((i) => i.done).length;
+    const itemLines =
+      items.length > 0
+        ? items
+            .map((i) => `  - [${i.done ? "x" : " "}] ${i.title}`)
+            .join("\n")
         : "  None";
 
     const links = workspace.links ?? [];
@@ -155,10 +149,8 @@ function buildWingPrompt(
   Branch: ${workspace.branch || "none"}
   PRs:
 ${prLines}
-  Todos (${doneCount}/${todos.length} done):
-${todoLines}
-  Notes:
-${noteLines}
+  Items (${doneCount}/${items.length} done):
+${itemLines}
   Links:
 ${linkLines}`;
   });

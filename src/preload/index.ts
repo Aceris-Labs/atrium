@@ -44,6 +44,8 @@ const api: WindowApi = {
     myPRs: (wingId: string) => ipcRenderer.invoke("github:myPRs", wingId),
     reviewRequests: (wingId: string) =>
       ipcRenderer.invoke("github:reviewRequests", wingId),
+    reviewedPRs: (wingId: string) =>
+      ipcRenderer.invoke("github:reviewedPRs", wingId),
     tmuxSessions: () => ipcRenderer.invoke("github:tmuxSessions"),
     fetchPR: (repo: string, number: number) =>
       ipcRenderer.invoke("github:fetchPR", repo, number),
@@ -93,6 +95,15 @@ const api: WindowApi = {
   },
   shell: {
     openExternal: (url: string) => shell.openExternal(url),
+  },
+  events: {
+    onDataChanged: (handler: () => void) => {
+      const wrapped = () => handler();
+      ipcRenderer.on("data:changed", wrapped);
+      return () => {
+        ipcRenderer.removeListener("data:changed", wrapped);
+      };
+    },
   },
   agents: {
     statuses: (sessions: Record<string, AgentSessionInfo | undefined>) =>
