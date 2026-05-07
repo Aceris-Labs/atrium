@@ -14,6 +14,7 @@ import type {
   Workspace,
   Wing,
   Item,
+  WorkspaceLink,
 } from "../../../shared/types";
 
 const STATUS_IDS = ["active", "blocked", "done", "archived"] as const;
@@ -51,6 +52,11 @@ interface Props {
   onDropPR: (workspace: Workspace, pr: PRStatus) => void;
   draggingItem: Item | null;
   onDropItem: (workspace: Workspace, note: Item) => void;
+  draggingLink: WorkspaceLink | null;
+  onDropLink: (workspace: Workspace, link: WorkspaceLink) => void;
+  /** Workspace id the active drag originated from, or null when dragged
+   *  from an inbox. Used to suppress the source card as a drop target. */
+  dragSourceWorkspaceId: string | null;
 
   selectedIds: Set<string>;
   onClearSelection: () => void;
@@ -84,6 +90,9 @@ export function SpacesSidebar({
   onDropPR,
   draggingItem,
   onDropItem,
+  draggingLink,
+  onDropLink,
+  dragSourceWorkspaceId,
   selectedIds,
   onClearSelection,
   onBulkSetStatus,
@@ -603,13 +612,23 @@ export function SpacesSidebar({
                             selected={selectedIds.has(ws.id)}
                             onClick={(e) => onSelect(ws.id, e)}
                             draggingPR={
-                              draggingWorkspace ? null : draggingPR
+                              draggingWorkspace || dragSourceWorkspaceId === ws.id
+                                ? null
+                                : draggingPR
                             }
                             onDrop={(pr) => onDropPR(ws, pr)}
                             draggingItem={
-                              draggingWorkspace ? null : draggingItem
+                              draggingWorkspace || dragSourceWorkspaceId === ws.id
+                                ? null
+                                : draggingItem
                             }
                             onDropItem={(note) => onDropItem(ws, note)}
+                            draggingLink={
+                              draggingWorkspace || dragSourceWorkspaceId === ws.id
+                                ? null
+                                : draggingLink
+                            }
+                            onDropLink={(link) => onDropLink(ws, link)}
                             onWorkspaceDragStart={() =>
                               setDraggingWorkspace(ws)
                             }

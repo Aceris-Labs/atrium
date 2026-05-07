@@ -1,5 +1,10 @@
 import { useState, useEffect } from "react";
-import type { Workspace, PRStatus, Item } from "../../../shared/types";
+import type {
+  Workspace,
+  PRStatus,
+  Item,
+  WorkspaceLink,
+} from "../../../shared/types";
 
 interface Props {
   workspace: Workspace;
@@ -12,6 +17,8 @@ interface Props {
   onDrop: (pr: PRStatus) => void;
   draggingItem?: Item | null;
   onDropItem?: (note: Item) => void;
+  draggingLink?: WorkspaceLink | null;
+  onDropLink?: (link: WorkspaceLink) => void;
   onWorkspaceDragStart?: () => void;
   onWorkspaceDragEnd?: () => void;
 }
@@ -46,6 +53,8 @@ export function WorkspaceCard({
   onDrop,
   draggingItem,
   onDropItem,
+  draggingLink,
+  onDropLink,
   onWorkspaceDragStart,
   onWorkspaceDragEnd,
 }: Props) {
@@ -108,8 +117,15 @@ export function WorkspaceCard({
     ? linkedKeys.has(`${draggingPR.repo ?? ""}-${draggingPR.number}`)
     : false;
   const isPRDropTarget = draggingPR !== null && !alreadyLinked;
-  const isItemDropTarget = !!draggingItem && !!onDropItem;
-  const isDropTarget = isPRDropTarget || isItemDropTarget;
+  const isItemDropTarget =
+    !!draggingItem &&
+    !!onDropItem &&
+    !(workspace.items ?? []).some((i) => i.id === draggingItem.id);
+  const isLinkDropTarget =
+    !!draggingLink &&
+    !!onDropLink &&
+    !(workspace.links ?? []).some((l) => l.id === draggingLink.id);
+  const isDropTarget = isPRDropTarget || isItemDropTarget || isLinkDropTarget;
 
   return (
     <div
@@ -135,9 +151,12 @@ export function WorkspaceCard({
         if (draggingPR && !alreadyLinked) {
           e.stopPropagation();
           onDrop(draggingPR);
-        } else if (draggingItem && onDropItem) {
+        } else if (draggingItem && onDropItem && isItemDropTarget) {
           e.stopPropagation();
           onDropItem(draggingItem);
+        } else if (draggingLink && onDropLink && isLinkDropTarget) {
+          e.stopPropagation();
+          onDropLink(draggingLink);
         }
       }}
     >
@@ -219,7 +238,9 @@ export function WorkspaceCard({
           <span className="drop-hint">
             {draggingPR
               ? `Drop to link PR #${draggingPR.number}`
-              : "Drop to attach note"}
+              : draggingLink
+                ? "Drop to move link"
+                : "Drop to attach note"}
           </span>
         ) : (
           <div className="card-status-row">

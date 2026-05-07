@@ -9,6 +9,11 @@ import { AddWorkspaceModal } from "./components/AddWorkspaceModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { SetupWizard } from "./components/SetupWizard";
 import { PRCard, PRCardSkeleton } from "./components/PRCard";
+import { Inbox, inboxKey } from "./components/Inbox";
+import {
+  awaitingThreadsToInbox,
+  buildPRWorkspaceMap,
+} from "./components/inboxMappers";
 import { WingTabs } from "./components/WingTabs";
 import { CreateWingModal } from "./components/CreateWingModal";
 import { WingSummaryModal } from "./components/WingSummaryModal";
@@ -22,9 +27,11 @@ import type {
   WorkspacePR,
   AgentSessionInfo,
   Item,
+  WorkspaceLink,
+  InboxItem,
 } from "../../shared/types";
 
-type MainTab = "prs" | "items";
+type MainTab = "inbox" | "prs" | "items";
 
 export default function App() {
   const [wings, setWings] = useState<Wing[]>([]);
@@ -48,130 +55,135 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [draggingPR, setDraggingPR] = useState<PRStatus | null>(null);
   const [draggingItem, setDraggingItem] = useState<Item | null>(null);
+  const [draggingLink, setDraggingLink] = useState<WorkspaceLink | null>(null);
+  // Inbox items the user has dismissed this session. Keyed by `inboxKey(item)`.
+  // Not persisted yet — when we add cross-session dismissal, this moves to wing
+  // storage and survives restarts.
+  const [dismissedInbox, setDismissedInbox] = useState<Set<string>>(new Set());
+  // Source workspace id for the active drag, or null when dragged from an
+  // inbox (PR inbox / wing-level items). Drop handlers use this to remove
+  // the entity from its source so cross-workspace drag is a move, not a copy.
+  const [dragSourceWsId, setDragSourceWsId] = useState<string | null>(null);
   const [watchedPRStatuses, setWatchedPRStatuses] = useState<PRStatus[]>([]);
   const [loadingWatched, setLoadingWatched] = useState<WorkspacePR[]>([]);
-  const [linkedPRStatuses, setLinkedPRStatuses] = useState<PRStatus[]>([]);
   const [showWatchModal, setShowWatchModal] = useState(false);
   const [hiddenStatusesByWing, setHiddenStatusesByWing] = useState<
     Map<string, Set<string>>
   >(new Map());
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
-  const [mainTab, setMainTab] = useState<MainTab>("prs");
+  const [mainTab, setMainTab] = useState<MainTab>("inbox");
   const syncRef = useRef(false);
+  const wingsRef = useRef<Wing[]>([]);
+  wingsRef.current = wings;
 
   async function loadWorkspaces(wingId: string) {
     const ws = await window.api.workspaces.list(wingId);
     setWorkspaces(ws);
   }
 
-  async function fetchLinkedPRs(workspacesList: Workspace[]) {
-    const allRefs = workspacesList.flatMap((ws) => ws.prs);
-    const unique = allRefs.filter(
-      (p, i) =>
-        allRefs.findIndex((q) => q.repo === p.repo && q.number === p.number) ===
-        i,
-    );
-    if (unique.length === 0) return;
-    const results = await Promise.all(
-      unique.map((p) => window.api.github.fetchPR(p.repo, p.number)),
-    );
-    setLinkedPRStatuses((prev) => {
-      const fresh = results.filter((r): r is PRStatus => r !== null);
-      const freshKeys = new Set(fresh.map((r) => `${r.repo}-${r.number}`));
-      const retained = prev.filter(
-        (old) =>
-          !freshKeys.has(`${old.repo}-${old.number}`) &&
-          unique.some((u) => u.repo === old.repo && u.number === old.number),
-      );
-      return [...fresh, ...retained];
-    });
-  }
-
-  const syncAll = useCallback(async (wingId: string | null) => {
-    if (!wingId) return;
-    if (syncRef.current) return;
-    syncRef.current = true;
-    setSyncing(true);
-    try {
-      const [prs, reviews, reviewed, sessions] = await Promise.all([
-        window.api.github.myPRs(wingId),
-        window.api.github.reviewRequests(wingId),
-        window.api.github.reviewedPRs(wingId),
-        window.api.github.tmuxSessions(),
-      ]);
-      setMyPRs(prs);
-      setReviewPRs(reviews);
-      setReviewedPRs(reviewed);
-      setTmuxSessions(sessions);
-      setLoadingPRs(false);
-
-      const ws = await window.api.workspaces.list(wingId);
-      if (ws.length > 0) {
-        const sessionMap: Record<string, AgentSessionInfo | undefined> = {};
-        const wing = wings.find((w) => w.id === wingId);
-        ws.forEach((w) => {
-          sessionMap[w.id] = {
-            tmuxSession: w.tmuxSession,
-            directoryPath: w.worktree?.path ?? wing?.projectDir,
-            claudeSessionId: w.claudeSessionId,
-          };
-        });
-        const statuses = await window.api.agents.statuses(sessionMap);
-        setAgentStatuses(statuses);
-        fetchLinkedPRs(ws);
-        // Capture latest recap for each workspace with a Claude session, in
-        // parallel. Persist to workspace.recap if the timestamp is newer.
-        const recapResults = await Promise.all(
-          ws.map(async (w) => {
-            if (!w.claudeSessionId) return null;
-            const r = await window.api.agents.recap(sessionMap[w.id]);
-            if (!r) return null;
-            // Only persist when newer than what's already stored
-            if (w.recap && w.recap.capturedAt >= r.timestamp) return null;
-            return {
-              ...w,
-              recap: { text: r.text, capturedAt: r.timestamp },
-            };
-          }),
-        );
-        const updates: Workspace[] = recapResults.filter(
-          (u): u is NonNullable<typeof u> => u !== null,
-        );
-        if (updates.length > 0) {
-          const saved = await window.api.workspaces.updateMany(wingId, updates);
-          setWorkspaces((prev) => {
-            const byId = new Map(saved.map((w) => [w.id, w]));
-            return prev.map((w) => byId.get(w.id) ?? w);
-          });
-        }
-      }
-    } finally {
-      syncRef.current = false;
-      setSyncing(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const loadReviewThreads = useCallback(async (wingId: string) => {
+    const threadMap = await window.api.github.reviewThreads(wingId);
+    const enrich = (prs: PRStatus[]): PRStatus[] =>
+      prs.map((pr) => {
+        const info = threadMap[`${pr.repo}-${pr.number}`];
+        if (!info) return pr;
+        return {
+          ...pr,
+          openComments: info.openComments,
+          threadsAwaitingYou: info.threadsAwaitingYou,
+          awaitingThreads: info.awaitingThreads,
+        };
+      });
+    setMyPRs(enrich);
+    setReviewPRs(enrich);
+    setReviewedPRs(enrich);
   }, []);
 
-  const pollAgents = useCallback(
+  const syncAll = useCallback(
     async (wingId: string | null) => {
       if (!wingId) return;
-      const ws = await window.api.workspaces.list(wingId);
-      if (ws.length > 0) {
-        const sessionMap: Record<string, AgentSessionInfo | undefined> = {};
-        const wing = wings.find((w) => w.id === wingId);
-        ws.forEach((w) => {
-          sessionMap[w.id] = {
-            tmuxSession: w.tmuxSession,
-            directoryPath: w.worktree?.path ?? wing?.projectDir,
-            claudeSessionId: w.claudeSessionId,
-          };
-        });
-        const statuses = await window.api.agents.statuses(sessionMap);
-        setAgentStatuses(statuses);
+      if (syncRef.current) return;
+      syncRef.current = true;
+      setSyncing(true);
+      try {
+        const [allPRs, sessions] = await Promise.all([
+          window.api.github.allPRs(wingId),
+          window.api.github.tmuxSessions(),
+        ]);
+        setMyPRs(allPRs.authored);
+        setReviewPRs(allPRs.reviewRequested);
+        setReviewedPRs(allPRs.reviewed);
+        setTmuxSessions(sessions);
+        setLoadingPRs(false);
+
+        // Heavy review-threads payload runs in parallel with the rest of the
+        // sync — cards paint immediately, inbox/badges hydrate when it lands.
+        loadReviewThreads(wingId);
+
+        const ws = await window.api.workspaces.list(wingId);
+        if (ws.length > 0) {
+          const sessionMap: Record<string, AgentSessionInfo | undefined> = {};
+          const wing = wingsRef.current.find((w) => w.id === wingId);
+          ws.forEach((w) => {
+            sessionMap[w.id] = {
+              tmuxSession: w.tmuxSession,
+              directoryPath: w.worktree?.path ?? wing?.projectDir,
+              claudeSessionId: w.claudeSessionId,
+            };
+          });
+          const statuses = await window.api.agents.statuses(sessionMap);
+          setAgentStatuses(statuses);
+          const recapResults = await Promise.all(
+            ws.map(async (w) => {
+              if (!w.claudeSessionId) return null;
+              const r = await window.api.agents.recap(sessionMap[w.id]);
+              if (!r) return null;
+              if (w.recap && w.recap.capturedAt >= r.timestamp) return null;
+              return {
+                ...w,
+                recap: { text: r.text, capturedAt: r.timestamp },
+              };
+            }),
+          );
+          const updates: Workspace[] = recapResults.filter(
+            (u): u is NonNullable<typeof u> => u !== null,
+          );
+          if (updates.length > 0) {
+            const saved = await window.api.workspaces.updateMany(
+              wingId,
+              updates,
+            );
+            setWorkspaces((prev) => {
+              const byId = new Map(saved.map((w) => [w.id, w]));
+              return prev.map((w) => byId.get(w.id) ?? w);
+            });
+          }
+        }
+      } finally {
+        syncRef.current = false;
+        setSyncing(false);
       }
     },
-    [wings],
+    [loadReviewThreads],
   );
+
+  const pollAgents = useCallback(async (wingId: string | null) => {
+    if (!wingId) return;
+    const ws = await window.api.workspaces.list(wingId);
+    if (ws.length > 0) {
+      const sessionMap: Record<string, AgentSessionInfo | undefined> = {};
+      const wing = wingsRef.current.find((w) => w.id === wingId);
+      ws.forEach((w) => {
+        sessionMap[w.id] = {
+          tmuxSession: w.tmuxSession,
+          directoryPath: w.worktree?.path ?? wing?.projectDir,
+          claudeSessionId: w.claudeSessionId,
+        };
+      });
+      const statuses = await window.api.agents.statuses(sessionMap);
+      setAgentStatuses(statuses);
+    }
+  }, []);
 
   async function loadWatched(wingId: string) {
     const watched = await window.api.watchedPRs.list(wingId);
@@ -307,18 +319,20 @@ export default function App() {
 
   useEffect(() => {
     if (setupDone !== true || !activeWingId) return;
-    setLinkedPRStatuses([]);
     setMyPRs([]);
     setReviewPRs([]);
+    setReviewedPRs([]);
     setWatchedPRStatuses([]);
     setLoadingPRs(true);
     loadWorkspaces(activeWingId);
     loadWatched(activeWingId);
     syncAll(activeWingId);
-    const prInterval = setInterval(() => syncAll(activeWingId), 60_000);
+    const prInterval = setInterval(() => syncAll(activeWingId), 5 * 60_000);
     const agentInterval = setInterval(() => pollAgents(activeWingId), 5_000);
     // External writes (e.g. via the Atrium MCP server) push a change event;
-    // refresh wing + workspaces so the UI catches up within ~250ms.
+    // refresh wing + workspaces so the UI catches up within ~250ms. PR state
+    // is intentionally not reset here — local writes (drag-drop, item edits)
+    // shouldn't trigger a full refetch.
     const unsubData = window.api.events.onDataChanged(() => {
       reloadWings();
       loadWorkspaces(activeWingId);
@@ -347,13 +361,32 @@ export default function App() {
 
   async function handleDropPR(workspace: Workspace, pr: PRStatus) {
     if (!pr.repo) return;
+    if (dragSourceWsId === workspace.id) return;
     if (workspace.prs.some((p) => p.repo === pr.repo && p.number === pr.number))
       return;
-    await handleUpdate({
-      ...workspace,
-      prs: [...workspace.prs, { repo: pr.repo, number: pr.number }],
-      ...(!workspace.repo ? { repo: pr.repo } : {}),
-    });
+    const updates: Promise<unknown>[] = [];
+    if (dragSourceWsId) {
+      const source = workspaces.find((w) => w.id === dragSourceWsId);
+      if (source) {
+        updates.push(
+          handleUpdate({
+            ...source,
+            prs: source.prs.filter(
+              (p) => !(p.repo === pr.repo && p.number === pr.number),
+            ),
+          }),
+        );
+      }
+    }
+    updates.push(
+      handleUpdate({
+        ...workspace,
+        prs: [...workspace.prs, { repo: pr.repo, number: pr.number }],
+        ...(!workspace.repo ? { repo: pr.repo } : {}),
+      }),
+    );
+    await Promise.all(updates);
+    setDragSourceWsId(null);
   }
 
   async function handleUpdateWing(updated: Wing) {
@@ -363,16 +396,59 @@ export default function App() {
 
   async function handleDropItemOnWorkspace(workspace: Workspace, item: Item) {
     if (!activeWing) return;
-    // Move item from wing.items → workspace.items
-    const remaining = (activeWing.items ?? []).filter((n) => n.id !== item.id);
-    await Promise.all([
-      handleUpdateWing({ ...activeWing, items: remaining }),
+    if (dragSourceWsId === workspace.id) return;
+    if ((workspace.items ?? []).some((i) => i.id === item.id)) return;
+
+    const updates: Promise<unknown>[] = [];
+    if (dragSourceWsId) {
+      const source = workspaces.find((w) => w.id === dragSourceWsId);
+      if (source) {
+        updates.push(
+          handleUpdate({
+            ...source,
+            items: (source.items ?? []).filter((i) => i.id !== item.id),
+          }),
+        );
+      }
+    } else {
+      // No source workspace → item came from the wing-level inbox.
+      const remaining = (activeWing.items ?? []).filter(
+        (n) => n.id !== item.id,
+      );
+      updates.push(handleUpdateWing({ ...activeWing, items: remaining }));
+    }
+    updates.push(
       handleUpdate({
         ...workspace,
         items: [item, ...(workspace.items ?? [])],
       }),
-    ]);
+    );
+    await Promise.all(updates);
     setDraggingItem(null);
+    setDragSourceWsId(null);
+  }
+
+  async function handleDropLinkOnWorkspace(
+    workspace: Workspace,
+    link: WorkspaceLink,
+  ) {
+    // Links always live on a workspace — no inbox source.
+    if (!dragSourceWsId || dragSourceWsId === workspace.id) return;
+    if ((workspace.links ?? []).some((l) => l.id === link.id)) return;
+    const source = workspaces.find((w) => w.id === dragSourceWsId);
+    if (!source) return;
+    await Promise.all([
+      handleUpdate({
+        ...source,
+        links: (source.links ?? []).filter((l) => l.id !== link.id),
+      }),
+      handleUpdate({
+        ...workspace,
+        links: [link, ...(workspace.links ?? [])],
+      }),
+    ]);
+    setDraggingLink(null);
+    setDragSourceWsId(null);
   }
 
   async function handleDelete(id: string) {
@@ -478,19 +554,20 @@ export default function App() {
     setSelectedIds(new Set());
   }
 
-  const allPRs = [...myPRs, ...reviewPRs, ...linkedPRStatuses].reduce<
-    PRStatus[]
-  >((acc, pr) => {
-    const idx = acc.findIndex(
-      (p) => p.number === pr.number && p.repo === pr.repo,
-    );
-    if (idx === -1) {
-      acc.push(pr);
-    } else if (pr.state !== "open" && acc[idx].state === "open") {
-      acc[idx] = pr;
-    }
-    return acc;
-  }, []);
+  const allPRs = [...myPRs, ...reviewPRs, ...reviewedPRs].reduce<PRStatus[]>(
+    (acc, pr) => {
+      const idx = acc.findIndex(
+        (p) => p.number === pr.number && p.repo === pr.repo,
+      );
+      if (idx === -1) {
+        acc.push(pr);
+      } else if (pr.state !== "open" && acc[idx].state === "open") {
+        acc[idx] = pr;
+      }
+      return acc;
+    },
+    [],
+  );
 
   function prKey(pr: PRStatus): string {
     return `${pr.repo ?? ""}-${pr.number}`;
@@ -534,6 +611,18 @@ export default function App() {
 
   const openReviews = reviewPRs.filter((pr) => pr.state === "open");
   const openMyPRs = myPRs.filter((pr) => pr.state === "open");
+
+  // Inbox items aggregated from every connector source. For now only GitHub
+  // awaiting-reply threads — Notion/Linear/etc. mappers slot in here later.
+  const inboxItems: InboxItem[] = (() => {
+    const reviewedOpen = reviewedPRs.filter((pr) => pr.state === "open");
+    const prWsMap = buildPRWorkspaceMap(workspaces);
+    const all = awaitingThreadsToInbox(
+      [...openReviews, ...openMyPRs, ...reviewedOpen],
+      prWsMap,
+    );
+    return all.filter((it) => !dismissedInbox.has(inboxKey(it)));
+  })();
 
   return (
     <div className="layout">
@@ -624,6 +713,9 @@ export default function App() {
           onDropPR={handleDropPR}
           draggingItem={draggingItem}
           onDropItem={handleDropItemOnWorkspace}
+          draggingLink={draggingLink}
+          onDropLink={handleDropLinkOnWorkspace}
+          dragSourceWorkspaceId={dragSourceWsId}
           selectedIds={selectedIds}
           onClearSelection={clearSelection}
           onBulkSetStatus={bulkSetStatus}
@@ -668,6 +760,30 @@ export default function App() {
                   onDelete={handleDelete}
                   onMove={handleMove}
                   onBack={() => setSelectedId(null)}
+                  onPRDragStart={(pr) => {
+                    setDraggingPR(pr);
+                    setDragSourceWsId(selectedWorkspace.id);
+                  }}
+                  onPRDragEnd={() => {
+                    setDraggingPR(null);
+                    setDragSourceWsId(null);
+                  }}
+                  onItemDragStart={(item) => {
+                    setDraggingItem(item);
+                    setDragSourceWsId(selectedWorkspace.id);
+                  }}
+                  onItemDragEnd={() => {
+                    setDraggingItem(null);
+                    setDragSourceWsId(null);
+                  }}
+                  onLinkDragStart={(link) => {
+                    setDraggingLink(link);
+                    setDragSourceWsId(selectedWorkspace.id);
+                  }}
+                  onLinkDragEnd={() => {
+                    setDraggingLink(null);
+                    setDragSourceWsId(null);
+                  }}
                   onRefreshSessions={async () => {
                     const sessions = await window.api.github.tmuxSessions();
                     setTmuxSessions(sessions);
@@ -678,10 +794,17 @@ export default function App() {
               <>
                 <div className="flex border-b border-line bg-bg shrink-0 px-8">
                   <TabButton
+                    active={mainTab === "inbox"}
+                    onClick={() => setMainTab("inbox")}
+                    count={inboxItems.length || undefined}
+                  >
+                    Inbox
+                  </TabButton>
+                  <TabButton
                     active={mainTab === "prs"}
                     onClick={() => setMainTab("prs")}
                   >
-                    Pull Requests
+                    PRs
                   </TabButton>
                   <TabButton
                     active={mainTab === "items"}
@@ -692,7 +815,20 @@ export default function App() {
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   <div className="max-w-[1800px] mx-auto px-8 py-5">
-                    {mainTab === "prs" ? (
+                    {mainTab === "inbox" ? (
+                      <Inbox
+                        items={inboxItems}
+                        loading={loadingPRs}
+                        onDismiss={(item) => {
+                          const key = inboxKey(item);
+                          setDismissedInbox((prev) => {
+                            const next = new Set(prev);
+                            next.add(key);
+                            return next;
+                          });
+                        }}
+                      />
+                    ) : mainTab === "prs" ? (
                       <PRsPanel
                         unlinkedReviews={openReviews}
                         unlinkedMyPRs={openMyPRs}
@@ -778,14 +914,16 @@ function TabButton({
   active,
   onClick,
   children,
+  count,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  count?: number;
 }) {
   return (
     <button
-      className={`px-5 py-4 text-sm font-bold uppercase tracking-[0.08em] border-b-[3px] -mb-px transition-colors ${
+      className={`px-5 py-4 text-sm font-bold uppercase tracking-[0.08em] border-b-[3px] -mb-px transition-colors inline-flex items-center gap-2 ${
         active
           ? "text-fg border-blue"
           : "text-fg-muted border-transparent hover:text-fg"
@@ -793,6 +931,15 @@ function TabButton({
       onClick={onClick}
     >
       {children}
+      {count !== undefined && count > 0 && (
+        <span
+          className={`text-[10px] font-semibold rounded-sm px-[6px] py-px ${
+            active ? "bg-blue text-bg" : "bg-bg-input text-fg-muted"
+          }`}
+        >
+          {count}
+        </span>
+      )}
     </button>
   );
 }
@@ -826,47 +973,8 @@ function PRsPanel({
   prKey,
   spaceTitleFor,
 }: PRsPanelProps) {
-  // Aggregate PRs awaiting your reply across review-requested, your-PRs, and watched.
-  const awaitingReply = (() => {
-    const seen = new Set<string>();
-    const out: PRStatus[] = [];
-    for (const pr of [
-      ...unlinkedReviews,
-      ...unlinkedMyPRs,
-      ...reviewedPRs,
-      ...watchedPRStatuses,
-    ]) {
-      if ((pr.threadsAwaitingYou ?? 0) === 0) continue;
-      if (pr.isDraft) continue;
-      const k = prKey(pr);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(pr);
-    }
-    return out;
-  })();
-
   return (
     <div className="flex flex-col gap-7">
-      <PRSection
-        title="Awaiting your reply"
-        count={loading ? undefined : awaitingReply.length}
-        loading={loading}
-        emptyMessage="No threads waiting on you."
-      >
-        {awaitingReply.map((pr) => (
-          <PRCard
-            key={prKey(pr)}
-            pr={pr}
-            spaceTitle={spaceTitleFor(pr)}
-            dragging={draggingPR?.number === pr.number}
-            onDragStart={() => setDraggingPR(pr)}
-            onDragEnd={() => setDraggingPR(null)}
-            onClick={() => window.api.shell.openExternal(pr.url)}
-          />
-        ))}
-      </PRSection>
-
       <PRSection
         title="Needs your review"
         count={loading ? undefined : unlinkedReviews.length}

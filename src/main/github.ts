@@ -4,49 +4,95 @@ import { readdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { getConfig, getWingProjectDir } from "./store";
-import type { PRStatus, RepoInfo } from "../shared/types";
+import type { PRStatus, RepoInfo, AwaitingReplyThread } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
 
-async function gql(searchQuery: string): Promise<PRStatus[]> {
-  const { ghPath } = getConfig();
+const PR_FIELDS_LITE = `
+  ... on PullRequest {
+    number
+    title
+    url
+    isDraft
+    reviewDecision
+    mergeStateStatus
+    autoMergeRequest { enabledAt }
+    repository { nameWithOwner }
+    author { login }
+    commits(last: 1) {
+      nodes { commit { statusCheckRollup { state } } }
+    }
+  }
+`;
 
-  const query = `
-    query {
-      viewer { login }
-      search(query: "${searchQuery}", type: ISSUE, first: 50) {
-        edges {
-          node {
-            ... on PullRequest {
-              number
-              title
-              url
-              isDraft
-              reviewDecision
-              mergeStateStatus
-              autoMergeRequest { enabledAt }
-              repository { nameWithOwner }
-              author { login }
-              commits(last: 1) {
-                nodes { commit { statusCheckRollup { state } } }
-              }
-              reviewThreads(first: 100) {
-                totalCount
-                nodes {
-                  isResolved
-                  comments(last: 1) {
-                    nodes { author { login } }
-                  }
-                }
-              }
-            }
+const PR_FIELDS_THREADS = `
+  ... on PullRequest {
+    number
+    repository { nameWithOwner }
+    title
+    url
+    reviewThreads(first: 10) {
+      totalCount
+      nodes {
+        id
+        isResolved
+        path
+        line
+        comments(last: 1) {
+          nodes {
+            author { login }
+            body
+            createdAt
+            url
           }
         }
       }
     }
+  }
+`;
+
+export interface AllPRs {
+  authored: PRStatus[];
+  reviewRequested: PRStatus[];
+  reviewed: PRStatus[];
+}
+
+/** Per-PR review-thread enrichment, keyed by `${repo}-${number}`. Fetched in
+ *  a separate GraphQL roundtrip so card-level data can render without waiting
+ *  on the heavier review-threads payload. */
+export type ReviewThreadInfo = {
+  openComments: number;
+  threadsAwaitingYou: number;
+  awaitingThreads: AwaitingReplyThread[];
+};
+
+/** Fetches authored / review-requested / reviewed PRs (card-level fields only,
+ *  no review threads). Pair with `listPRReviewThreads` for the inbox/badges. */
+export async function listAllPRs(wingId: string): Promise<AllPRs> {
+  const empty: AllPRs = { authored: [], reviewRequested: [], reviewed: [] };
+  const scope = await wingRepoScope(wingId);
+  if (scope === null) return empty;
+
+  const authoredQ = `is:pr is:open author:@me${scope}`;
+  const reviewRequestedQ = `is:pr is:open review-requested:@me${scope}`;
+  const reviewedQ = `is:pr is:open reviewed-by:@me -author:@me${scope}`;
+
+  const query = `
+    query {
+      authored: search(query: "${authoredQ}", type: ISSUE, first: 30) {
+        edges { node { ${PR_FIELDS_LITE} } }
+      }
+      reviewRequested: search(query: "${reviewRequestedQ}", type: ISSUE, first: 30) {
+        edges { node { ${PR_FIELDS_LITE} } }
+      }
+      reviewed: search(query: "${reviewedQ}", type: ISSUE, first: 30) {
+        edges { node { ${PR_FIELDS_LITE} } }
+      }
+    }
   `;
 
+  const { ghPath } = getConfig();
   try {
     const { stdout } = await execFileAsync(ghPath, [
       "api",
@@ -55,48 +101,90 @@ async function gql(searchQuery: string): Promise<PRStatus[]> {
       `query=${query}`,
     ]);
     const data = JSON.parse(stdout);
-    const viewerLogin: string | null = data.data.viewer?.login ?? null;
-    return data.data.search.edges
-      .map((e: any) => e.node)
-      .filter((n: any) => n?.number != null)
-      .map((n: any) => mapNode(n, viewerLogin));
-  } catch {
-    return [];
+    if (data.errors) {
+      console.error("[github] GraphQL errors:", data.errors);
+    }
+    const extract = (key: string): PRStatus[] =>
+      (data.data?.[key]?.edges ?? [])
+        .map((e: any) => e.node)
+        .filter((n: any) => n?.number != null)
+        .map((n: any) => mapNodeLite(n));
+    return {
+      authored: extract("authored"),
+      reviewRequested: extract("reviewRequested"),
+      reviewed: extract("reviewed"),
+    };
+  } catch (err) {
+    console.error("[github] listAllPRs failed:", err);
+    return empty;
   }
 }
 
-export async function listMyPRs(wingId: string): Promise<PRStatus[]> {
-  return scopedPRQuery(wingId, "is:pr is:open author:@me");
-}
-
-export async function listReviewRequests(wingId: string): Promise<PRStatus[]> {
-  return scopedPRQuery(wingId, "is:pr is:open review-requested:@me");
-}
-
-/** PRs the viewer has commented on or reviewed (but isn't necessarily a
- *  current requested reviewer). Used to surface threads awaiting reply on
- *  PRs the user voluntarily reviewed. */
-export async function listReviewedPRs(wingId: string): Promise<PRStatus[]> {
-  return scopedPRQuery(wingId, "is:pr is:open reviewed-by:@me -author:@me");
-}
-
-async function scopedPRQuery(
+/** Returns review-thread enrichment for the same PRs `listAllPRs` returns. */
+export async function listPRReviewThreads(
   wingId: string,
-  baseQuery: string,
-): Promise<PRStatus[]> {
+): Promise<Record<string, ReviewThreadInfo>> {
+  const scope = await wingRepoScope(wingId);
+  if (scope === null) return {};
+
+  const authoredQ = `is:pr is:open author:@me${scope}`;
+  const reviewRequestedQ = `is:pr is:open review-requested:@me${scope}`;
+  const reviewedQ = `is:pr is:open reviewed-by:@me -author:@me${scope}`;
+
+  const query = `
+    query {
+      viewer { login }
+      authored: search(query: "${authoredQ}", type: ISSUE, first: 30) {
+        edges { node { ${PR_FIELDS_THREADS} } }
+      }
+      reviewRequested: search(query: "${reviewRequestedQ}", type: ISSUE, first: 30) {
+        edges { node { ${PR_FIELDS_THREADS} } }
+      }
+      reviewed: search(query: "${reviewedQ}", type: ISSUE, first: 30) {
+        edges { node { ${PR_FIELDS_THREADS} } }
+      }
+    }
+  `;
+
+  const { ghPath } = getConfig();
+  try {
+    const { stdout } = await execFileAsync(ghPath, [
+      "api",
+      "graphql",
+      "-f",
+      `query=${query}`,
+    ]);
+    const data = JSON.parse(stdout);
+    if (data.errors) {
+      console.error("[github] GraphQL errors:", data.errors);
+    }
+    const viewerLogin: string | null = data.data?.viewer?.login ?? null;
+    const out: Record<string, ReviewThreadInfo> = {};
+    for (const key of ["authored", "reviewRequested", "reviewed"]) {
+      for (const edge of data.data?.[key]?.edges ?? []) {
+        const node = edge.node;
+        if (!node || node.number == null) continue;
+        const repo = node.repository?.nameWithOwner ?? "";
+        out[`${repo}-${node.number}`] = mapReviewThreads(node, viewerLogin);
+      }
+    }
+    return out;
+  } catch (err) {
+    console.error("[github] listPRReviewThreads failed:", err);
+    return {};
+  }
+}
+
+/** Returns the search-query suffix scoping to the wing's repos.
+ *  - "" (empty string) → no rootDir; query runs unbounded across GitHub.
+ *  - null → rootDir set but no repos found; caller should return empty.
+ *  - " repo:a/b repo:c/d" → scope to specific repos. */
+async function wingRepoScope(wingId: string): Promise<string | null> {
   const rootDir = getWingProjectDir(wingId);
-
-  // No root dir configured → unbounded query across all of GitHub.
-  if (!rootDir) return gql(baseQuery);
-
-  // Root dir configured but no repos found → deliberately return nothing.
+  if (!rootDir) return "";
   const repos = await getReposInDirectory(rootDir);
-  if (repos.length === 0) return [];
-
-  // Always scope to the exact repos in the wing dir — using `org:` would
-  // pull in PRs from sibling repos that aren't part of this wing.
-  const scope = " " + repos.map((r) => `repo:${r.repo}`).join(" ");
-  return gql(baseQuery + scope);
+  if (repos.length === 0) return null;
+  return " " + repos.map((r) => `repo:${r.repo}`).join(" ");
 }
 
 export async function getReposInDirectory(dir: string): Promise<RepoInfo[]> {
@@ -203,18 +291,10 @@ export async function listTmuxSessions(): Promise<string[]> {
   }
 }
 
-function mapNode(node: any, viewerLogin: string | null): PRStatus {
+function mapNodeLite(node: any): PRStatus {
   const ciState =
     node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null;
-  const threads = node.reviewThreads?.nodes ?? [];
-  const unresolvedThreads = threads.filter((t: any) => !t.isResolved);
-  const openComments = unresolvedThreads.length;
-  const threadsAwaitingYou = viewerLogin
-    ? unresolvedThreads.filter((t: any) => {
-        const lastAuthor = t.comments?.nodes?.[0]?.author?.login;
-        return lastAuthor && lastAuthor !== viewerLogin;
-      }).length
-    : 0;
+  const repo = node.repository?.nameWithOwner ?? "";
   return {
     number: node.number,
     title: node.title,
@@ -223,12 +303,54 @@ function mapNode(node: any, viewerLogin: string | null): PRStatus {
     isDraft: node.isDraft ?? false,
     ciStatus: mapCIState(ciState),
     reviewDecision: node.reviewDecision ?? null,
-    openComments,
-    threadsAwaitingYou,
+    openComments: 0,
     mergeState: node.mergeStateStatus ?? undefined,
     autoMerge: !!node.autoMergeRequest,
     author: node.author?.login,
-    repo: node.repository?.nameWithOwner,
+    repo,
+  };
+}
+
+function mapReviewThreads(
+  node: any,
+  viewerLogin: string | null,
+): ReviewThreadInfo {
+  const threads = node.reviewThreads?.nodes ?? [];
+  const unresolvedThreads = threads.filter((t: any) => !t.isResolved);
+  const repo = node.repository?.nameWithOwner ?? "";
+  const awaitingThreads: AwaitingReplyThread[] = viewerLogin
+    ? unresolvedThreads
+        .map((t: any): AwaitingReplyThread | null => {
+          const last = t.comments?.nodes?.[0];
+          const lastAuthor = last?.author?.login;
+          if (!lastAuthor || lastAuthor === viewerLogin) return null;
+          return {
+            threadId: t.id,
+            pr: {
+              number: node.number,
+              title: node.title,
+              url: node.url,
+              repo,
+            },
+            path: t.path ?? undefined,
+            line: t.line ?? null,
+            url: last.url ?? node.url,
+            lastComment: {
+              author: lastAuthor,
+              body: last.body ?? "",
+              createdAt: last.createdAt ?? "",
+            },
+          };
+        })
+        .filter((t: AwaitingReplyThread | null): t is AwaitingReplyThread =>
+          Boolean(t),
+        )
+    : [];
+
+  return {
+    openComments: unresolvedThreads.length,
+    threadsAwaitingYou: awaitingThreads.length,
+    awaitingThreads,
   };
 }
 

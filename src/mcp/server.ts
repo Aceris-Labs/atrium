@@ -376,7 +376,7 @@ server.registerTool(
   "atrium_add_link",
   {
     description:
-      "Attach an external URL to a workspace (Linear/Jira tickets, Notion/Confluence docs, GitHub PRs, Figma files, Slack threads, etc.). Use this whenever the user wants a link tracked on the space — NOT atrium_add_item. Source and category are auto-detected from the URL host; pass them explicitly only to override.",
+      "Attach an external URL to a workspace (Linear/Jira tickets, Notion/Confluence docs, Figma files, Slack threads, etc.). Use this whenever the user wants a link tracked on the space — NOT atrium_add_item. Source and category are auto-detected from the URL host; pass them explicitly only to override. IMPORTANT: For GitHub PRs use atrium_link_pr instead — that hooks into the workspace's first-class PR tracking (CI status, review state, etc.), not the generic links list.",
     inputSchema: {
       url: z.string().min(1),
       label: z.string().optional(),
@@ -417,6 +417,73 @@ server.registerTool(
     };
     await updateWorkspace(wing.id, next);
     return json({ ok: true, link });
+  },
+);
+
+function parseGithubPRUrl(
+  url: string,
+): { repo: string; number: number } | null {
+  const m = url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+  if (!m) return null;
+  const num = parseInt(m[2], 10);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return { repo: m[1], number: num };
+}
+
+server.registerTool(
+  "atrium_link_pr",
+  {
+    description:
+      "Link a GitHub PR to a workspace's first-class PR list (workspace.prs). Use this — NOT atrium_add_link — for any GitHub PR; this hooks into CI status, review state, comments, and merge tracking. Provide either `url` (a github.com/.../pull/<n> URL) or both `repo` (owner/name) and `number`. Idempotent: re-linking an already-linked PR is a no-op.",
+    inputSchema: {
+      url: z.string().optional(),
+      repo: z.string().optional(),
+      number: z.number().int().positive().optional(),
+      wing_id: z.string().optional(),
+      workspace_id: z.string().optional(),
+    },
+  },
+  async ({ url, repo, number, wing_id, workspace_id }) => {
+    let resolvedRepo = repo;
+    let resolvedNumber = number;
+    if (url) {
+      const parsed = parseGithubPRUrl(url);
+      if (!parsed) {
+        throw new Error(
+          `Could not parse a GitHub PR URL from: ${url} (expected https://github.com/<owner>/<repo>/pull/<n>)`,
+        );
+      }
+      resolvedRepo = resolvedRepo ?? parsed.repo;
+      resolvedNumber = resolvedNumber ?? parsed.number;
+    }
+    if (!resolvedRepo || !resolvedNumber) {
+      throw new Error(
+        "atrium_link_pr requires either `url` or both `repo` and `number`.",
+      );
+    }
+    const { wing, workspace } = resolve(wing_id, workspace_id);
+    const already = workspace.prs.some(
+      (p) => p.repo === resolvedRepo && p.number === resolvedNumber,
+    );
+    if (already) {
+      return json({
+        ok: true,
+        linked: false,
+        reason: "already-linked",
+        pr: { repo: resolvedRepo, number: resolvedNumber },
+      });
+    }
+    const next: Workspace = {
+      ...workspace,
+      prs: [...workspace.prs, { repo: resolvedRepo, number: resolvedNumber }],
+      ...(workspace.repo ? {} : { repo: resolvedRepo }),
+    };
+    await updateWorkspace(wing.id, next);
+    return json({
+      ok: true,
+      linked: true,
+      pr: { repo: resolvedRepo, number: resolvedNumber },
+    });
   },
 );
 

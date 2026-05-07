@@ -483,28 +483,6 @@ body,
   animation: spin 0.6s linear infinite;
 }
 
-/* PR card (grid item, mirrors workspace card shape) */
-.pr-card {
-  @apply bg-bg-card border border-line rounded-md h-full flex flex-col gap-2 cursor-pointer;
-  padding: 14px 16px;
-  transition:
-    border-color 0.15s,
-    background 0.15s;
-}
-
-.pr-card:hover {
-  @apply bg-bg-card-hover border-line-hover;
-}
-
-.pr-card-header {
-  @apply flex items-center justify-between gap-2;
-}
-
-.pr-card-number {
-  @apply text-sm font-semibold text-fg-muted;
-  font-family: "SF Mono", "Fira Code", monospace;
-}
-
 .pr-tag {
   @apply font-semibold uppercase tracking-[0.04em] rounded-sm inline-flex;
   font-size: 9px;
@@ -528,31 +506,6 @@ body,
   background: var(--green) 22;
 }
 
-.pr-card-badges {
-  @apply flex gap-1 shrink-0;
-}
-
-.pr-card-title {
-  @apply text-base font-medium text-fg overflow-hidden;
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.pr-card-footer {
-  @apply flex items-center justify-between gap-2 pt-1 border-t border-line mt-auto;
-}
-
-.pr-card-repo {
-  @apply text-xs text-fg-muted whitespace-nowrap overflow-hidden text-ellipsis;
-  font-family: "SF Mono", "Fira Code", monospace;
-}
-
-.pr-card-author {
-  @apply text-xs text-fg-muted shrink-0;
-}
-
 .badge.space-badge {
   @apply max-w-[140px] overflow-hidden text-ellipsis whitespace-nowrap;
   color: var(--blue);
@@ -560,14 +513,84 @@ body,
   background: var(--blue) 11;
 }
 
-.pr-card-footer-badges {
-  @apply flex gap-1 shrink-0;
-}
-
 .badge.comments-badge {
   color: var(--purple);
   border-color: var(--purple) 44;
   background: var(--purple) 11;
+}
+
+/* ── Review thread inbox ──────────────────────────────────────────────── */
+
+.thread-inbox {
+  @apply flex flex-col gap-3;
+}
+
+.thread-group {
+  @apply flex flex-col rounded-md border border-line overflow-hidden;
+  border-left: 3px solid var(--orange);
+  background: var(--orange) 08;
+}
+
+.thread-group-header {
+  @apply flex items-baseline gap-3 w-full text-left px-4 py-2 transition-colors;
+  background: var(--orange) 14;
+  border-bottom: 1px solid var(--line);
+}
+
+.thread-group-header:hover {
+  background: var(--orange) 22;
+}
+
+.thread-group-pr-title {
+  @apply text-sm font-bold text-fg truncate min-w-0;
+}
+
+.thread-group-pr-meta {
+  @apply text-xs text-fg-muted shrink-0;
+  font-family: "SF Mono", "Fira Code", monospace;
+}
+
+.thread-group-count {
+  @apply text-xs text-fg-muted shrink-0 ml-auto uppercase tracking-[0.05em];
+}
+
+.thread-group-rows {
+  @apply flex flex-col;
+}
+
+.thread-row {
+  @apply w-full text-left flex flex-col gap-[2px] px-4 py-2 pl-6 transition-colors;
+}
+
+.thread-row:hover {
+  background: var(--bg-card-hover);
+}
+
+.thread-row-meta {
+  @apply flex items-baseline gap-3 text-xs text-fg-muted;
+}
+
+.thread-row-author {
+  @apply font-bold text-fg;
+}
+
+.thread-row-path {
+  font-family: "SF Mono", "Fira Code", monospace;
+  @apply text-fg-muted truncate;
+}
+
+.thread-row-time {
+  @apply ml-auto shrink-0;
+}
+
+.thread-row-body {
+  @apply text-sm text-fg;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .badge.comments-awaiting {
@@ -619,11 +642,6 @@ body,
   color: var(--red);
   border-color: var(--red) 44;
   background: var(--red) 11;
-}
-
-.pr-card.merged,
-.pr-card.closed {
-  @apply opacity-60;
 }
 
 .badge.merge-queued {

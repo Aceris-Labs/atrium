@@ -60,6 +60,12 @@ interface Props {
   onMove: (id: string, toWingId: string) => void;
   onBack: () => void;
   onRefreshSessions: () => Promise<void>;
+  onPRDragStart?: (pr: PRStatus) => void;
+  onPRDragEnd?: () => void;
+  onItemDragStart?: (item: Item) => void;
+  onItemDragEnd?: () => void;
+  onLinkDragStart?: (link: WorkspaceLink) => void;
+  onLinkDragEnd?: () => void;
 }
 
 function linkStatusBadgeClass(status: string): string {
@@ -110,6 +116,12 @@ export function WorkspaceDetail({
   onMove,
   onBack,
   onRefreshSessions,
+  onPRDragStart,
+  onPRDragEnd,
+  onItemDragStart,
+  onItemDragEnd,
+  onLinkDragStart,
+  onLinkDragEnd,
 }: Props) {
   const items: Item[] = workspace.items ?? [];
   const linkItems: WorkspaceLink[] = workspace.links ?? [];
@@ -995,10 +1007,14 @@ export function WorkspaceDetail({
                           key={key}
                           className="detail-pr-card-wrapper relative"
                           draggable
-                          onDragStart={() => setDraggingPRKey(key)}
+                          onDragStart={() => {
+                            setDraggingPRKey(key);
+                            onPRDragStart?.(pr);
+                          }}
                           onDragEnd={() => {
                             setDraggingPRKey(null);
                             setPRDropTarget(null);
+                            onPRDragEnd?.();
                           }}
                           onDragOver={(e) => {
                             if (!draggingPRKey || draggingPRKey === key) return;
@@ -1245,7 +1261,7 @@ export function WorkspaceDetail({
                 ) : (
                   <p className="detail-empty-text">
                     Click Generate to have Claude summarize this space's PRs,
-                    todos, tickets, and notes.
+                    items, and links.
                   </p>
                 )}
               </div>
@@ -1257,6 +1273,8 @@ export function WorkspaceDetail({
               <ItemsTab
                 items={items}
                 onChange={(next) => onUpdate({ ...workspace, items: next })}
+                onItemDragStart={onItemDragStart}
+                onItemDragEnd={onItemDragEnd}
               />
             </div>
           )}
@@ -1278,6 +1296,8 @@ export function WorkspaceDetail({
                   .filter((l): l is WorkspaceLink => !!l);
                 onUpdate({ ...workspace, links: reordered });
               }}
+              onLinkDragStart={onLinkDragStart}
+              onLinkDragEnd={onLinkDragEnd}
             />
           )}
 
@@ -1494,6 +1514,8 @@ interface LinksTabProps {
   hydrationPending: Set<string>;
   onDelete: (id: string) => void;
   onReorder: (orderedIds: string[]) => void;
+  onLinkDragStart?: (link: WorkspaceLink) => void;
+  onLinkDragEnd?: () => void;
 }
 
 const LINK_GROUP_LABELS: Record<string, string> = {
@@ -1520,6 +1542,8 @@ function LinksTab({
   hydrationPending,
   onDelete,
   onReorder,
+  onLinkDragStart,
+  onLinkDragEnd,
 }: LinksTabProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{
@@ -1612,10 +1636,14 @@ function LinksTab({
                     key={link.id}
                     className="relative h-full"
                     draggable
-                    onDragStart={() => setDraggingId(link.id)}
+                    onDragStart={() => {
+                      setDraggingId(link.id);
+                      onLinkDragStart?.(link);
+                    }}
                     onDragEnd={() => {
                       setDraggingId(null);
                       setDropTarget(null);
+                      onLinkDragEnd?.();
                     }}
                     onDragOver={(e) => {
                       if (!draggingId || draggingId === link.id) return;

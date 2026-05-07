@@ -49,6 +49,8 @@ export interface PRStatus {
   openComments: number;
   /** Unresolved review threads where the latest comment isn't from you. */
   threadsAwaitingYou?: number;
+  /** The actual threads counted in `threadsAwaitingYou`, used by the inbox. */
+  awaitingThreads?: AwaitingReplyThread[];
   mergeState?:
     | "CLEAN"
     | "BLOCKED"
@@ -59,6 +61,66 @@ export interface PRStatus {
   autoMerge?: boolean;
   author?: string;
   repo?: string;
+}
+
+/** A single review-thread row for the "Awaiting your reply" inbox. */
+export interface AwaitingReplyThread {
+  threadId: string;
+  pr: { number: number; title: string; url: string; repo: string };
+  /** File path the thread is anchored to (null for top-level review comments). */
+  path?: string;
+  line?: number | null;
+  /** Deep-link to the comment on GitHub. */
+  url: string;
+  lastComment: {
+    author: string;
+    body: string;
+    createdAt: string;
+  };
+}
+
+/** Why a given InboxItem is in the inbox. Drives prioritization and badging. */
+export type InboxKind =
+  | "thread-awaiting-reply" // you replied last, they answered
+  | "mention" // @-mentioned in a comment/message
+  | "review-request" // PR/doc review requested of you
+  | "assignment" // ticket/issue assigned to you
+  | "dm" // direct message
+  | "thread-unread"; // following a thread with new activity
+
+/** A single actionable item from any connector source, normalized to one shape
+ *  so the Inbox UI can render and prioritize across sources. */
+export interface InboxItem {
+  source: ConnectorSource;
+  kind: InboxKind;
+  /** Stable id within the source. `${source}:${id}` is the dismissal key. */
+  id: string;
+  /** Deep link that opens the item in its source. */
+  url: string;
+  /** Primary subject — PR title, page name, issue title, message excerpt. */
+  title: string;
+  /** Secondary context — repo, channel, project, space. */
+  containerLabel?: string;
+  /** Most recent comment body / message excerpt, cleaned for display. */
+  preview: string;
+  /** Author of the latest activity. */
+  author: string;
+  /** ISO timestamp of the latest activity, used for sorting. */
+  updatedAt: string;
+  /** For Slack/Discord-like threads: number of unread messages. */
+  unreadCount?: number;
+  /** Workspace this item is associated with, resolved at fetch time
+   *  by matching the source entity (PR ref / link URL) against
+   *  workspace.prs / workspace.links. */
+  workspaceId?: string;
+  /** Shared key for items that should cluster in the UI (e.g. multiple
+   *  threads on the same PR, multiple discussions on the same Notion page). */
+  groupKey?: string;
+  /** Display name for the cluster — typically the parent entity's title
+   *  (PR title / page title). */
+  groupTitle?: string;
+  /** Deep link to the cluster's parent entity (PR url / page url). */
+  groupUrl?: string;
 }
 
 /** Unified todo+note. Title is required and shown in the list; body is
@@ -342,9 +404,21 @@ export type WindowApi = {
     ) => Promise<Workspace>;
   };
   github: {
-    myPRs: (wingId: string) => Promise<PRStatus[]>;
-    reviewRequests: (wingId: string) => Promise<PRStatus[]>;
-    reviewedPRs: (wingId: string) => Promise<PRStatus[]>;
+    allPRs: (wingId: string) => Promise<{
+      authored: PRStatus[];
+      reviewRequested: PRStatus[];
+      reviewed: PRStatus[];
+    }>;
+    reviewThreads: (wingId: string) => Promise<
+      Record<
+        string,
+        {
+          openComments: number;
+          threadsAwaitingYou: number;
+          awaitingThreads: AwaitingReplyThread[];
+        }
+      >
+    >;
     tmuxSessions: () => Promise<string[]>;
     fetchPR: (repo: string, number: number) => Promise<PRStatus | null>;
     defaultRepo: (wingId: string) => Promise<string | null>;

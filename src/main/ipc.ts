@@ -30,9 +30,8 @@ import {
 } from "path";
 import { homedir } from "os";
 import {
-  listMyPRs,
-  listReviewRequests,
-  listReviewedPRs,
+  listAllPRs,
+  listPRReviewThreads,
   listTmuxSessions,
   fetchPR,
   getDefaultRepo,
@@ -137,12 +136,9 @@ export function registerIpcHandlers(): void {
   );
 
   // ── GitHub ───────────────────────────────────────────────────────────────
-  ipcMain.handle("github:myPRs", (_, wingId: string) => listMyPRs(wingId));
-  ipcMain.handle("github:reviewRequests", (_, wingId: string) =>
-    listReviewRequests(wingId),
-  );
-  ipcMain.handle("github:reviewedPRs", (_, wingId: string) =>
-    listReviewedPRs(wingId),
+  ipcMain.handle("github:allPRs", (_, wingId: string) => listAllPRs(wingId));
+  ipcMain.handle("github:reviewThreads", (_, wingId: string) =>
+    listPRReviewThreads(wingId),
   );
   ipcMain.handle("github:tmuxSessions", () => listTmuxSessions());
   ipcMain.handle("github:fetchPR", (_, repo: string, number: number) =>

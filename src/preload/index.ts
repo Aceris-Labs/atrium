@@ -41,11 +41,9 @@ const api: WindowApi = {
       ipcRenderer.invoke("workspaces:move", fromWingId, toWingId, id),
   },
   github: {
-    myPRs: (wingId: string) => ipcRenderer.invoke("github:myPRs", wingId),
-    reviewRequests: (wingId: string) =>
-      ipcRenderer.invoke("github:reviewRequests", wingId),
-    reviewedPRs: (wingId: string) =>
-      ipcRenderer.invoke("github:reviewedPRs", wingId),
+    allPRs: (wingId: string) => ipcRenderer.invoke("github:allPRs", wingId),
+    reviewThreads: (wingId: string) =>
+      ipcRenderer.invoke("github:reviewThreads", wingId),
     tmuxSessions: () => ipcRenderer.invoke("github:tmuxSessions"),
     fetchPR: (repo: string, number: number) =>
       ipcRenderer.invoke("github:fetchPR", repo, number),

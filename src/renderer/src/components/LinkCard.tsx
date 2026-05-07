@@ -1,10 +1,9 @@
-import { useState } from "react";
-import { ClipboardIcon, CheckIcon } from "@heroicons/react/20/solid";
 import type {
   WorkspaceLink,
   LinkStatus,
   LinkStatusKind,
 } from "../../../shared/types";
+import { CopyButton } from "./CopyButton";
 
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -74,28 +73,6 @@ function DeleteButton({ onDelete }: { onDelete: () => void }) {
       }}
     >
       ×
-    </button>
-  );
-}
-
-function CopyButton({ url }: { url: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className="shrink-0 w-5 h-5 flex items-center justify-center bg-transparent border-none text-fg-muted cursor-pointer opacity-0 group-hover:opacity-100 hover:text-fg transition-opacity"
-      onClick={async (e) => {
-        e.stopPropagation();
-        await navigator.clipboard.writeText(url);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      }}
-      title={copied ? "Copied!" : "Copy URL"}
-    >
-      {copied ? (
-        <CheckIcon className="w-3.5 h-3.5 text-green" />
-      ) : (
-        <ClipboardIcon className="w-3.5 h-3.5" />
-      )}
     </button>
   );
 }
@@ -190,7 +167,7 @@ function StandardCard({
             {hydration!.status}
           </span>
         )}
-        <CopyButton url={link.url} />
+        <CopyButton value={link.url} title="Copy URL" />
         <DeleteButton onDelete={onDelete} />
       </div>
 
@@ -263,7 +240,7 @@ function FigmaCard({
       <div className="flex items-center gap-2 min-w-0">
         <SourceBadge source={link.source} />
         <div className="flex-1" />
-        <CopyButton url={link.url} />
+        <CopyButton value={link.url} title="Copy URL" />
         <DeleteButton onDelete={onDelete} />
       </div>
 
@@ -332,7 +309,7 @@ function SlackCard({
           </span>
         )}
         <div className="flex-1" />
-        <CopyButton url={link.url} />
+        <CopyButton value={link.url} title="Copy URL" />
         <DeleteButton onDelete={onDelete} />
       </div>
 

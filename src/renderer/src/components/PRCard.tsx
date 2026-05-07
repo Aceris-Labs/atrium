@@ -1,4 +1,5 @@
 import type { PRStatus } from "../../../shared/types";
+import { CopyButton } from "./CopyButton";
 
 interface Props {
   pr: PRStatus;
@@ -45,6 +46,9 @@ const MERGE_BADGE: Record<string, { label: string; cls: string } | null> = {
   UNKNOWN: null,
 };
 
+const CARD_BASE =
+  "group h-full flex flex-col gap-2 rounded-md border border-line bg-bg-card px-4 py-[14px] cursor-pointer transition-colors hover:bg-bg-card-hover hover:border-line-hover";
+
 export function PRCard({
   pr,
   tag,
@@ -55,23 +59,24 @@ export function PRCard({
   onClick,
 }: Props) {
   const mergeBadge = pr.mergeState ? MERGE_BADGE[pr.mergeState] : null;
+  const dimmed = pr.state === "merged" || pr.state === "closed";
 
   return (
     <div
-      className={`pr-card${dragging ? " dragging" : ""}${pr.state === "merged" ? " merged" : ""}${pr.state === "closed" ? " closed" : ""}`}
+      className={`${CARD_BASE}${dragging ? " opacity-40" : ""}${dimmed ? " opacity-60" : ""}`}
       draggable={!!onDragStart}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
     >
-      <div className="pr-card-header">
-        <span className="pr-card-number">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-fg-muted font-mono">
           #{pr.number}
           {tag && (
             <span className={`pr-tag pr-tag-${tag}`}>{TAG_LABEL[tag]}</span>
           )}
         </span>
-        <div className="pr-card-badges">
+        <div className="flex gap-1 shrink-0 items-center">
           {spaceTitle && (
             <span
               className="badge space-badge"
@@ -102,14 +107,19 @@ export function PRCard({
           {pr.autoMerge && pr.state === "open" && (
             <span className="badge merge-auto">auto-merge</span>
           )}
+          <CopyButton value={pr.url} title="Copy PR URL" />
         </div>
       </div>
 
-      <div className="pr-card-title">{pr.title}</div>
+      <div className="text-base font-medium text-fg overflow-hidden line-clamp-2 leading-[1.4]">
+        {pr.title}
+      </div>
 
-      <div className="pr-card-footer">
-        <span className="pr-card-repo">{pr.repo ?? ""}</span>
-        <div className="pr-card-footer-badges">
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-line mt-auto">
+        <span className="text-xs text-fg-muted whitespace-nowrap overflow-hidden text-ellipsis font-mono">
+          {pr.repo ?? ""}
+        </span>
+        <div className="flex gap-1 shrink-0">
           {pr.state === "open" && (pr.threadsAwaitingYou ?? 0) > 0 ? (
             <span
               className="badge comments-awaiting"
@@ -134,7 +144,9 @@ export function PRCard({
             </span>
           )}
           {pr.state === "open" && pr.author && !pr.reviewDecision && (
-            <span className="pr-card-author">@{pr.author}</span>
+            <span className="text-xs text-fg-muted shrink-0">
+              @{pr.author}
+            </span>
           )}
         </div>
       </div>
@@ -149,23 +161,27 @@ interface SkeletonProps {
 
 export function PRCardSkeleton({ number, repo }: SkeletonProps) {
   return (
-    <div className="pr-card">
-      <div className="pr-card-header">
+    <div className={CARD_BASE}>
+      <div className="flex items-center justify-between gap-2">
         {number !== undefined ? (
-          <span className="pr-card-number">#{number}</span>
+          <span className="text-sm font-semibold text-fg-muted font-mono">
+            #{number}
+          </span>
         ) : (
           <span className="shimmer-bar w-12 h-4" />
         )}
-        <div className="pr-card-badges">
+        <div className="flex gap-1 shrink-0">
           <span className="shimmer-bar w-10 h-4" />
         </div>
       </div>
-      <div className="pr-card-title">
+      <div className="text-base font-medium text-fg overflow-hidden leading-[1.4]">
         <span className="shimmer-bar w-full block" />
       </div>
-      <div className="pr-card-footer">
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-line mt-auto">
         {repo !== undefined ? (
-          <span className="pr-card-repo">{repo}</span>
+          <span className="text-xs text-fg-muted whitespace-nowrap overflow-hidden text-ellipsis font-mono">
+            {repo}
+          </span>
         ) : (
           <span className="shimmer-bar w-24 h-4" />
         )}
