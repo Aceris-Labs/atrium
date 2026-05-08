@@ -29,22 +29,12 @@ import {
   resolve as pathResolve,
 } from "path";
 import { homedir } from "os";
-import {
-  listAllPRs,
-  listPRReviewThreads,
-  listTmuxSessions,
-  fetchPR,
-  getDefaultRepo,
-} from "./github";
+import { getDefaultRepo } from "./github";
 import { launchWorkspace, stopSession } from "./launcher";
 import { generateWorkspaceDigest, generateWingSummary } from "./agent/digest";
 import { detectRepo, currentBranch, listWorktrees } from "./git";
 import { detectTools } from "./setup";
-import {
-  getAgentStatuses,
-  getSessionRecap,
-  listAvailableSessions,
-} from "./agents";
+import { listAvailableSessions } from "./agents";
 import { listDirs } from "./fs";
 import {
   listConnectors,
@@ -56,15 +46,12 @@ import {
   disableCloudMcp,
 } from "./connectors/registry";
 import { startLinearOAuth } from "./oauth/linear";
-import { hydrateLinks, refreshLink, getCachedLinks } from "./linkHydration";
+import { cacheStore, orchestrator } from "./cache";
 import type {
   Workspace,
   Wing,
   LaunchAction,
   ConnectorSource,
-  AgentSessionInfo,
-  PRStatus,
-  LinkStatus,
 } from "../shared/types";
 
 function resolveWorktreePath(inputPath: string, baseDir: string): string {
@@ -136,14 +123,9 @@ export function registerIpcHandlers(): void {
   );
 
   // ── GitHub ───────────────────────────────────────────────────────────────
-  ipcMain.handle("github:allPRs", (_, wingId: string) => listAllPRs(wingId));
-  ipcMain.handle("github:reviewThreads", (_, wingId: string) =>
-    listPRReviewThreads(wingId),
-  );
-  ipcMain.handle("github:tmuxSessions", () => listTmuxSessions());
-  ipcMain.handle("github:fetchPR", (_, repo: string, number: number) =>
-    fetchPR(repo, number),
-  );
+  // PR fetching and tmux session listing are now driven by cache refreshers
+  // (see src/main/cache/). Only the wing → default-repo lookup remains as a
+  // one-shot capability probe.
   ipcMain.handle("github:defaultRepo", (_, wingId: string) =>
     getDefaultRepo(wingId),
   );
@@ -157,14 +139,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("workspace:stop", (_, workspaceId: string) =>
     stopSession(workspaceId),
   );
-  ipcMain.handle(
-    "workspace:generateDigest",
-    (
-      _,
-      workspace: Workspace,
-      prStatuses: PRStatus[],
-      linkStatuses: Record<string, LinkStatus>,
-    ) => generateWorkspaceDigest(workspace, prStatuses, linkStatuses),
+  ipcMain.handle("workspace:generateDigest", (_, workspace: Workspace) =>
+    generateWorkspaceDigest(workspace),
   );
   ipcMain.handle(
     "workspace:createWorktree",
@@ -275,15 +251,10 @@ export function registerIpcHandlers(): void {
   );
 
   // ── Agents ───────────────────────────────────────────────────────────────
-  ipcMain.handle(
-    "agents:statuses",
-    (_, sessions: Record<string, AgentSessionInfo | undefined>) =>
-      getAgentStatuses(sessions),
-  );
+  // Agent status + recap flow through the cache via the AgentsRefresher.
+  // `agents:sessions` is kept as a one-shot capability probe for the
+  // session-picker modal.
   ipcMain.handle("agents:sessions", () => listAvailableSessions());
-  ipcMain.handle("agents:recap", (_, info: AgentSessionInfo | undefined) =>
-    getSessionRecap(info),
-  );
 
   // ── Watched PRs (wing-scoped) ────────────────────────────────────────────
   ipcMain.handle("watchedPRs:list", (_, wingId: string) =>
@@ -291,11 +262,19 @@ export function registerIpcHandlers(): void {
   );
   ipcMain.handle(
     "watchedPRs:add",
-    (_, wingId: string, pr: { number: number; repo: string }) =>
-      addWatchedPR(wingId, pr),
+    async (_, wingId: string, pr: { number: number; repo: string }) => {
+      const result = await addWatchedPR(wingId, pr);
+      void orchestrator.refreshWatched();
+      return result;
+    },
   );
-  ipcMain.handle("watchedPRs:remove", (_, wingId: string, num: number) =>
-    removeWatchedPR(wingId, num),
+  ipcMain.handle(
+    "watchedPRs:remove",
+    async (_, wingId: string, num: number) => {
+      const result = await removeWatchedPR(wingId, num);
+      void orchestrator.refreshWatched();
+      return result;
+    },
   );
 
   // ── Config (global only) ─────────────────────────────────────────────────
@@ -359,10 +338,17 @@ export function registerIpcHandlers(): void {
     }
   });
 
-  // ── Link hydration ───────────────────────────────────────────────────────
-  ipcMain.handle("links:getCached", (_, urls: string[]) =>
-    getCachedLinks(urls),
+  // ── Cache bridge (renderer mirror) ───────────────────────────────────────
+  ipcMain.handle("cache:snapshot", () => cacheStore.snapshot());
+  ipcMain.handle("cache:setActiveWing", (_, wingId: string | null) =>
+    orchestrator.setActiveWing(wingId),
   );
-  ipcMain.handle("links:hydrate", (_, urls: string[]) => hydrateLinks(urls));
-  ipcMain.handle("links:refresh", (_, url: string) => refreshLink(url));
+  ipcMain.handle("cache:refreshAll", () => orchestrator.refreshAll());
+  ipcMain.handle("cache:refreshLinked", () => orchestrator.refreshLinked());
+  ipcMain.handle("cache:requestPRRefresh", (_, repo: string, number: number) =>
+    orchestrator.refreshPRKey(repo, number),
+  );
+  ipcMain.handle("cache:requestLinkRefresh", (_, url: string) =>
+    orchestrator.refreshLink(url),
+  );
 }

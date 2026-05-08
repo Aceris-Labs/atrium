@@ -373,6 +373,8 @@ export interface GitRepoInfo {
   branches?: string[];
 }
 
+import type { CacheEvent, CacheState } from "./cacheTypes";
+
 export type WindowApi = {
   wings: {
     list: () => Promise<Wing[]>;
@@ -404,33 +406,12 @@ export type WindowApi = {
     ) => Promise<Workspace>;
   };
   github: {
-    allPRs: (wingId: string) => Promise<{
-      authored: PRStatus[];
-      reviewRequested: PRStatus[];
-      reviewed: PRStatus[];
-    }>;
-    reviewThreads: (wingId: string) => Promise<
-      Record<
-        string,
-        {
-          openComments: number;
-          threadsAwaitingYou: number;
-          awaitingThreads: AwaitingReplyThread[];
-        }
-      >
-    >;
-    tmuxSessions: () => Promise<string[]>;
-    fetchPR: (repo: string, number: number) => Promise<PRStatus | null>;
     defaultRepo: (wingId: string) => Promise<string | null>;
   };
   workspace: {
     launch: (wingId: string, w: Workspace) => Promise<string>; // returns tmux session name
     stop: (workspaceId: string) => Promise<void>;
-    generateDigest: (
-      workspace: Workspace,
-      prStatuses: PRStatus[],
-      linkStatuses: Record<string, LinkStatus>,
-    ) => Promise<string>;
+    generateDigest: (workspace: Workspace) => Promise<string>;
     createWorktree: (
       wingId: string,
       workspaceId: string,
@@ -448,15 +429,7 @@ export type WindowApi = {
     summarize: (wingId: string, workspaceIds: string[]) => Promise<string>;
   };
   agents: {
-    statuses: (
-      sessions: Record<string, AgentSessionInfo | undefined>,
-    ) => Promise<
-      Record<string, "working" | "needs-input" | "idle" | "no-session">
-    >;
     sessions: () => Promise<{ name: string; status: string }[]>;
-    recap: (
-      info: AgentSessionInfo | undefined,
-    ) => Promise<{ text: string; timestamp: string } | null>;
   };
   shell: {
     openExternal: (url: string) => Promise<void>;
@@ -507,9 +480,13 @@ export type WindowApi = {
     enableCloudMcp: (source: ConnectorSource) => Promise<void>;
     disableCloudMcp: (source: ConnectorSource) => Promise<void>;
   };
-  links: {
-    getCached: (urls: string[]) => Promise<Record<string, LinkStatus>>;
-    hydrate: (urls: string[]) => Promise<Record<string, LinkStatus>>;
-    refresh: (url: string) => Promise<LinkStatus>;
+  cache: {
+    snapshot: () => Promise<CacheState>;
+    setActiveWing: (wingId: string | null) => Promise<void>;
+    refreshAll: () => Promise<void>;
+    refreshLinked: () => Promise<void>;
+    requestPRRefresh: (repo: string, number: number) => Promise<void>;
+    requestLinkRefresh: (url: string) => Promise<void>;
+    onEvent: (handler: (event: CacheEvent) => void) => () => void;
   };
 };

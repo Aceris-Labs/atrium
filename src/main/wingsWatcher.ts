@@ -2,12 +2,14 @@ import { watch, type FSWatcher } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import type { BrowserWindow } from "electron";
+import { orchestrator } from "./cache";
 
 const WINGS_DIR = join(homedir(), ".atrium", "wings");
 
 /** Watches ~/.atrium/wings and emits a single coalesced event whenever the
  *  on-disk JSON changes (workspaces, watched PRs, or wing settings). The
- *  renderer listens via `data:changed` and re-fetches what it needs.
+ *  renderer listens via `data:changed` and re-fetches what it needs; the
+ *  cache also reconciles its workspace-derived watchers in parallel.
  *
  *  Coalescing: rename writes (temp → real) fire two events ~ms apart. We
  *  debounce 250ms so the renderer only refreshes once per logical change. */
@@ -24,6 +26,9 @@ export function startWingsWatcher(getWindow: () => BrowserWindow | null): {
       if (win && !win.isDestroyed()) {
         win.webContents.send("data:changed");
       }
+      void orchestrator.reconcileAgents();
+      void orchestrator.refreshLinked();
+      void orchestrator.refreshLinks();
       timer = null;
     }, 250);
   };

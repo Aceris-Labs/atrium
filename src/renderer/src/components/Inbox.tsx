@@ -2,7 +2,6 @@ import type { InboxItem, InboxKind } from "../../../shared/types";
 
 interface Props {
   items: InboxItem[];
-  loading?: boolean;
   onDismiss?: (item: InboxItem) => void;
 }
 
@@ -29,7 +28,7 @@ interface Group {
   latestAt: string;
 }
 
-export function Inbox({ items, loading, onDismiss }: Props) {
+export function Inbox({ items, onDismiss }: Props) {
   const groups = groupItems(items);
 
   return (
@@ -38,18 +37,10 @@ export function Inbox({ items, loading, onDismiss }: Props) {
         <span className="text-base font-bold uppercase tracking-[0.08em] text-fg-muted">
           Awaiting your reply
         </span>
-        {!loading && <span className="section-count">{items.length}</span>}
+        <span className="section-count">{items.length}</span>
       </div>
 
-      {loading && items.length === 0 ? (
-        <div className="thread-inbox">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="thread-row">
-              <span className="shimmer-bar w-full h-12 block" />
-            </div>
-          ))}
-        </div>
-      ) : items.length === 0 ? (
+      {items.length === 0 ? (
         <div className="border border-dashed border-line rounded-md py-6 px-4 text-sm text-fg-muted text-center">
           No items waiting on you.
         </div>
@@ -93,8 +84,7 @@ function InboxGroup({
           <span className="thread-group-pr-meta">{group.sourceLabel}</span>
         )}
         <span className="thread-group-count">
-          {group.items.length}{" "}
-          {group.items.length === 1 ? "item" : "items"}
+          {group.items.length} {group.items.length === 1 ? "item" : "items"}
         </span>
       </button>
       <div className="thread-group-rows">

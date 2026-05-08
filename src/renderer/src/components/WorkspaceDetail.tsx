@@ -19,6 +19,15 @@ import {
   buildProfile,
   type ProfileEditorState,
 } from "./LaunchProfileEditor";
+import {
+  usePRsForWorkspace,
+  usePRTags,
+  useAgentStatus,
+  useRecap,
+  useTmuxSession,
+} from "../store/selectors";
+import { useCacheStore } from "../store/cache";
+import { prKey, type PRTag } from "../../../shared/cacheTypes";
 import type {
   PRStatus,
   Workspace,
@@ -49,17 +58,10 @@ interface Props {
   wingId: string;
   workspace: Workspace;
   allWings: Wing[];
-  prStatuses: PRStatus[];
-  reviewPRNumbers: Set<number>;
-  watchedPRNumbers: Set<number>;
-  myPRNumbers: Set<number>;
-  tmuxSessions: string[];
-  agentStatus: "working" | "needs-input" | "idle" | "no-session";
   onUpdate: (workspace: Workspace) => void;
   onDelete: (id: string) => void;
   onMove: (id: string, toWingId: string) => void;
   onBack: () => void;
-  onRefreshSessions: () => Promise<void>;
   onPRDragStart?: (pr: PRStatus) => void;
   onPRDragEnd?: () => void;
   onItemDragStart?: (item: Item) => void;
@@ -89,33 +91,86 @@ function parsePRInput(input: string): { number: number; repo?: string } | null {
   return null;
 }
 
-function prTag(
-  num: number,
-  reviewPRs: Set<number>,
-  watchedPRs: Set<number>,
-  myPRs: Set<number>,
+/** Given a draggable container, find which child is nearest the cursor and
+ *  whether to insert before or after it. Used to extend reorder drop coverage
+ *  past individual cards into the gaps and the leading/trailing edges of the
+ *  grid — otherwise a length-2 list has no way to express "drop at the end". */
+function findNearestDropPoint(
+  containerEl: HTMLElement,
+  clientX: number,
+  clientY: number,
+  childIds: string[],
+): { id: string; before: boolean; horizontal: boolean } | null {
+  const children = Array.from(containerEl.children) as HTMLElement[];
+  if (children.length === 0 || childIds.length !== children.length) return null;
+
+  // Grid layout if any two children share roughly the same Y.
+  let isGrid = false;
+  const firstTop = children[0].getBoundingClientRect().top;
+  for (let i = 1; i < children.length; i++) {
+    if (Math.abs(children[i].getBoundingClientRect().top - firstTop) < 5) {
+      isGrid = true;
+      break;
+    }
+  }
+
+  let nearestIdx = 0;
+  let nearestDist = Infinity;
+  for (let i = 0; i < children.length; i++) {
+    const r = children[i].getBoundingClientRect();
+    const cx = (r.left + r.right) / 2;
+    const cy = (r.top + r.bottom) / 2;
+    const dx = clientX - cx;
+    const dy = clientY - cy;
+    const d = dx * dx + dy * dy;
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearestIdx = i;
+    }
+  }
+
+  const r = children[nearestIdx].getBoundingClientRect();
+  const before = isGrid
+    ? clientX < (r.left + r.right) / 2
+    : clientY < (r.top + r.bottom) / 2;
+  return { id: childIds[nearestIdx], before, horizontal: isGrid };
+}
+
+/** Pick the best card-display tag from the set of cache-side tags. The card
+ *  shows at most one ribbon, so this is a priority cascade. */
+function pickDisplayTag(
+  tags: PRTag[],
 ): "review" | "watching" | "mine" | undefined {
-  if (reviewPRs.has(num)) return "review";
-  if (watchedPRs.has(num)) return "watching";
-  if (myPRs.has(num)) return "mine";
+  if (tags.includes("review")) return "review";
+  if (tags.includes("watching")) return "watching";
+  if (tags.includes("mine")) return "mine";
   return undefined;
+}
+
+/** Thin wrapper that pulls the per-wing tags for a PR out of the cache and
+ *  passes the chosen display tag to PRCard. Keeps tag lookup co-located with
+ *  the card so the parent doesn't have to thread tag membership through. */
+function PRCardWithTag({
+  pr,
+  wingId,
+  onClick,
+}: {
+  pr: PRStatus;
+  wingId: string;
+  onClick: () => void;
+}) {
+  const tags = usePRTags(wingId, pr.repo, pr.number);
+  return <PRCard pr={pr} tag={pickDisplayTag(tags)} onClick={onClick} />;
 }
 
 export function WorkspaceDetail({
   wingId,
   workspace,
   allWings,
-  prStatuses,
-  reviewPRNumbers,
-  watchedPRNumbers,
-  myPRNumbers,
-  tmuxSessions,
-  agentStatus,
   onUpdate,
   onDelete,
   onMove,
   onBack,
-  onRefreshSessions,
   onPRDragStart,
   onPRDragEnd,
   onItemDragStart,
@@ -125,18 +180,16 @@ export function WorkspaceDetail({
 }: Props) {
   const items: Item[] = workspace.items ?? [];
   const linkItems: WorkspaceLink[] = workspace.links ?? [];
+  const agentStatus = useAgentStatus(workspace.id);
+  const linkHydrations = useCacheStore((s) => s.links);
 
   const [linkInput, setLinkInput] = useState("");
   const [prInput, setPrInput] = useState("");
   const [prInputError, setPrInputError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [fetchedPRs, setFetchedPRs] = useState<PRStatus[]>([]);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(workspace.title);
-  const [linkHydrations, setLinkHydrations] = useState<
-    Record<string, LinkStatus>
-  >({});
-  const [hydrationPending, setHydrationPending] = useState<Set<string>>(
+  const [refreshingLinks, setRefreshingLinks] = useState<Set<string>>(
     new Set(),
   );
   const [availableSessions, setAvailableSessions] = useState<
@@ -195,71 +248,19 @@ export function WorkspaceDetail({
     if (editingTitle) titleInputRef.current?.select();
   }, [editingTitle]);
 
+  // Linked PRs are kept fresh by the main-side cache refreshers (see
+  // src/main/cache/refreshers/prs.ts). On mount, opportunistically request a
+  // refresh for any workspace.prs key that isn't yet in the cache so the user
+  // doesn't wait the full TTL on a freshly-added PR.
   useEffect(() => {
-    const fromStatuses = prStatuses.filter((pr) =>
-      workspace.prs.some((p) => p.repo === pr.repo && p.number === pr.number),
-    );
-    if (fromStatuses.length > 0) {
-      setFetchedPRs((prev) => {
-        const existing = new Set(prev.map((p) => `${p.repo}-${p.number}`));
-        const toAdd = fromStatuses.filter(
-          (pr) => !existing.has(`${pr.repo}-${pr.number}`),
-        );
-        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
-      });
-    }
-
-    async function fetchMissing() {
-      const allKnown = [...prStatuses, ...fetchedPRs];
-      const missing = workspace.prs.filter(
-        (p) =>
-          !allKnown.find((k) => k.repo === p.repo && k.number === p.number),
-      );
-      if (missing.length === 0) return;
-      const results = await Promise.all(
-        missing.map((p) => window.api.github.fetchPR(p.repo, p.number)),
-      );
-      const valid = results.filter((r): r is PRStatus => r !== null);
-      if (valid.length > 0) setFetchedPRs((prev) => [...prev, ...valid]);
-    }
-    fetchMissing();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace.id, workspace.prs, prStatuses]);
-
-  const linksKey = (workspace.links ?? []).map((l) => l.url).join("\0");
-
-  useEffect(() => {
-    const urls = linksKey ? linksKey.split("\0") : [];
-    if (urls.length === 0) {
-      setLinkHydrations({});
-      setHydrationPending(new Set());
-      return;
-    }
-    let cancelled = false;
-    async function run() {
-      const stale = await window.api.links.getCached(urls);
-      if (!cancelled) {
-        setLinkHydrations(stale);
-        setHydrationPending(new Set(urls.filter((u) => !stale[u])));
-      }
-      try {
-        const fresh = await window.api.links.hydrate(urls);
-        if (!cancelled) {
-          setLinkHydrations(fresh);
-          setHydrationPending(new Set());
-        }
-      } catch {
-        if (!cancelled) setHydrationPending(new Set());
+    const known = useCacheStore.getState().prs;
+    for (const p of workspace.prs) {
+      if (!known[prKey(p.repo, p.number)]) {
+        void window.api.cache.requestPRRefresh(p.repo, p.number);
       }
     }
-    void run();
-    const interval = setInterval(() => void run(), 5 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace.id, linksKey]);
+  }, [workspace.id, workspace.prs]);
 
   useEffect(() => {
     window.api.agents.sessions().then(setAvailableSessions);
@@ -282,7 +283,7 @@ export function WorkspaceDetail({
 
   const wing = allWings.find((w) => w.id === wingId);
   const effectiveDir = workspace.worktree?.path ?? wing?.projectDir;
-  const recap = workspace.recap;
+  const recap = useRecap(workspace.id);
 
   // Show the worktree's actual current HEAD (so the header reflects shell
   // checkouts), not the saved workspace.branch field.
@@ -318,11 +319,7 @@ export function WorkspaceDetail({
   async function handleGenerateDigest() {
     setGeneratingDigest(true);
     try {
-      const text = await window.api.workspace.generateDigest(
-        workspace,
-        [...prStatuses, ...fetchedPRs],
-        linkHydrations,
-      );
+      const text = await window.api.workspace.generateDigest(workspace);
       onUpdate({
         ...workspace,
         digest: { text, generatedAt: new Date().toISOString() },
@@ -334,14 +331,14 @@ export function WorkspaceDetail({
 
   async function handleRefreshLinks() {
     const urls = (workspace.links ?? []).map((l) => l.url);
-    setHydrationPending(new Set(urls));
-    const results = await Promise.all(
-      urls.map((url) => window.api.links.refresh(url)),
-    );
-    const next: Record<string, LinkStatus> = {};
-    urls.forEach((url, i) => (next[url] = results[i]));
-    setLinkHydrations(next);
-    setHydrationPending(new Set());
+    setRefreshingLinks(new Set(urls));
+    try {
+      await Promise.all(
+        urls.map((url) => window.api.cache.requestLinkRefresh(url)),
+      );
+    } finally {
+      setRefreshingLinks(new Set());
+    }
   }
 
   function commitRename() {
@@ -469,12 +466,7 @@ export function WorkspaceDetail({
     onUpdate(updatedWorkspace);
     setPrInput("");
     setPrInputError("");
-    if (
-      !allKnownPRs.find((p) => p.repo === repo && p.number === parsed.number)
-    ) {
-      const result = await window.api.github.fetchPR(repo, parsed.number);
-      if (result) setFetchedPRs((prev) => [...prev, result]);
-    }
+    void window.api.cache.requestPRRefresh(repo, parsed.number);
   }
 
   function handleReorderPR(
@@ -511,7 +503,10 @@ export function WorkspaceDetail({
       if (!workspace.tmuxSession) {
         onUpdate({ ...workspace, tmuxSession: sessionName });
       }
-      await onRefreshSessions();
+      // Tmux session list refreshes via the cache's tmux refresher; trigger
+      // an immediate tick so the launched session shows up before the next
+      // 30-second poll.
+      void window.api.cache.refreshAll();
       if (workspace.worktree?.path) {
         const b = await window.api.git.currentBranch(workspace.worktree.path);
         setActualBranch(b);
@@ -523,29 +518,16 @@ export function WorkspaceDetail({
 
   async function handleStop() {
     await window.api.workspace.stop(workspace.tmuxSession ?? workspace.id);
-    await onRefreshSessions();
+    void window.api.cache.refreshAll();
   }
 
-  const allKnownPRs = [...prStatuses, ...fetchedPRs].reduce<PRStatus[]>(
-    (acc, pr) => {
-      if (!acc.find((p) => p.number === pr.number && p.repo === pr.repo))
-        acc.push(pr);
-      return acc;
-    },
-    [],
-  );
-  const knownByKey = new Map<string, PRStatus>();
-  for (const pr of allKnownPRs) {
-    knownByKey.set(`${pr.repo ?? ""}-${pr.number}`, pr);
-  }
-  // Sort linkedPRs by workspace.prs order so reordering in the UI updates
-  // which one is "primary" on the workspace card.
-  const linkedPRs = workspace.prs
-    .map((p) => knownByKey.get(`${p.repo}-${p.number}`))
+  // Linked PRs sourced from the cache, in workspace.prs order so reordering
+  // in the UI updates which one is "primary" on the workspace card.
+  const linkedSlots = usePRsForWorkspace(workspace);
+  const linkedPRs = linkedSlots
+    .map((s) => s.pr)
     .filter((pr): pr is PRStatus => pr !== undefined);
-  const tmuxRunning = workspace.tmuxSession
-    ? tmuxSessions.includes(workspace.tmuxSession)
-    : false;
+  const tmuxRunning = useTmuxSession(workspace.tmuxSession);
 
   return (
     <div className="flex flex-col h-full">
@@ -995,7 +977,50 @@ export function WorkspaceDetail({
                   </div>
                 </div>
                 {workspace.prs.length > 0 ? (
-                  <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))] auto-rows-fr">
+                  <div
+                    className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(300px,1fr))] auto-rows-fr"
+                    onDragOver={(e) => {
+                      if (!draggingPRKey) return;
+                      e.preventDefault();
+                      const ids = [
+                        ...linkedPRs.map((p) => `${p.repo ?? ""}-${p.number}`),
+                        ...workspace.prs
+                          .filter(
+                            (p) =>
+                              !linkedPRs.find(
+                                (k) =>
+                                  k.repo === p.repo && k.number === p.number,
+                              ),
+                          )
+                          .map((p) => `${p.repo}-${p.number}`),
+                      ];
+                      const point = findNearestDropPoint(
+                        e.currentTarget,
+                        e.clientX,
+                        e.clientY,
+                        ids,
+                      );
+                      if (point && point.id !== draggingPRKey) {
+                        setPRDropTarget({
+                          key: point.id,
+                          before: point.before,
+                        });
+                      }
+                    }}
+                    onDrop={(e) => {
+                      if (!draggingPRKey) return;
+                      e.preventDefault();
+                      if (prDropTarget && prDropTarget.key !== draggingPRKey) {
+                        handleReorderPR(
+                          draggingPRKey,
+                          prDropTarget.key,
+                          prDropTarget.before,
+                        );
+                      }
+                      setDraggingPRKey(null);
+                      setPRDropTarget(null);
+                    }}
+                  >
                     {linkedPRs.map((pr) => {
                       const key = `${pr.repo ?? ""}-${pr.number}`;
                       const isDragOver =
@@ -1016,26 +1041,6 @@ export function WorkspaceDetail({
                             setPRDropTarget(null);
                             onPRDragEnd?.();
                           }}
-                          onDragOver={(e) => {
-                            if (!draggingPRKey || draggingPRKey === key) return;
-                            e.preventDefault();
-                            const rect =
-                              e.currentTarget.getBoundingClientRect();
-                            const before =
-                              e.clientX < rect.left + rect.width / 2;
-                            setPRDropTarget({ key, before });
-                          }}
-                          onDrop={(e) => {
-                            if (!draggingPRKey || draggingPRKey === key) return;
-                            e.preventDefault();
-                            handleReorderPR(
-                              draggingPRKey,
-                              key,
-                              prDropTarget?.before ?? true,
-                            );
-                            setDraggingPRKey(null);
-                            setPRDropTarget(null);
-                          }}
                           style={{
                             opacity: draggingPRKey === key ? 0.4 : 1,
                           }}
@@ -1046,14 +1051,9 @@ export function WorkspaceDetail({
                           {isDragOver && !prDropTarget?.before && (
                             <div className="absolute -right-1.5 top-0 bottom-0 w-0.5 bg-blue rounded-full" />
                           )}
-                          <PRCard
+                          <PRCardWithTag
                             pr={pr}
-                            tag={prTag(
-                              pr.number,
-                              reviewPRNumbers,
-                              watchedPRNumbers,
-                              myPRNumbers,
-                            )}
+                            wingId={wingId}
                             onClick={() =>
                               window.api.shell.openExternal(pr.url)
                             }
@@ -1137,7 +1137,7 @@ export function WorkspaceDetail({
                       </button>
                       {ticketLinks.map((link) => {
                         const h = linkHydrations[link.url];
-                        const isLoading = hydrationPending.has(link.url);
+                        const isLoading = !h && refreshingLinks.has(link.url);
                         return (
                           <div
                             key={link.id}
@@ -1183,7 +1183,7 @@ export function WorkspaceDetail({
                       Latest recap
                     </span>
                     <span className="text-xs text-fg-muted">
-                      {formatRelative(recap.capturedAt)} · from Claude
+                      {formatRelative(recap.timestamp)} · from Claude
                     </span>
                     <button
                       className="btn btn-ghost btn-sm ml-auto"
@@ -1287,7 +1287,7 @@ export function WorkspaceDetail({
               onAddLink={handleAddLink}
               onRefresh={handleRefreshLinks}
               hydrations={linkHydrations}
-              hydrationPending={hydrationPending}
+              refreshingLinks={refreshingLinks}
               onDelete={handleDeleteLink}
               onReorder={(orderedIds) => {
                 const byId = new Map(linkItems.map((l) => [l.id, l]));
@@ -1511,7 +1511,7 @@ interface LinksTabProps {
   onAddLink: () => void;
   onRefresh: () => void;
   hydrations: Record<string, LinkStatus>;
-  hydrationPending: Set<string>;
+  refreshingLinks: Set<string>;
   onDelete: (id: string) => void;
   onReorder: (orderedIds: string[]) => void;
   onLinkDragStart?: (link: WorkspaceLink) => void;
@@ -1539,7 +1539,7 @@ function LinksTab({
   onAddLink,
   onRefresh,
   hydrations,
-  hydrationPending,
+  refreshingLinks,
   onDelete,
   onReorder,
   onLinkDragStart,
@@ -1617,7 +1617,29 @@ function LinksTab({
               </span>
               <span className="section-count">{grouped[group].length}</span>
             </div>
-            <div className="link-list">
+            <div
+              className="link-list"
+              onDragOver={(e) => {
+                if (!draggingId) return;
+                e.preventDefault();
+                const point = findNearestDropPoint(
+                  e.currentTarget,
+                  e.clientX,
+                  e.clientY,
+                  grouped[group].map((l) => l.id),
+                );
+                if (point && point.id !== draggingId) setDropTarget(point);
+              }}
+              onDrop={(e) => {
+                if (!draggingId) return;
+                e.preventDefault();
+                if (dropTarget && dropTarget.id !== draggingId) {
+                  handleReorder(draggingId, dropTarget.id, dropTarget.before);
+                }
+                setDraggingId(null);
+                setDropTarget(null);
+              }}
+            >
               {grouped[group].map((link) => {
                 const isDragging = draggingId === link.id;
                 const showInsertBefore =
@@ -1645,46 +1667,6 @@ function LinksTab({
                       setDropTarget(null);
                       onLinkDragEnd?.();
                     }}
-                    onDragOver={(e) => {
-                      if (!draggingId || draggingId === link.id) return;
-                      e.preventDefault();
-                      const cardEl = e.currentTarget as HTMLElement;
-                      const rect = cardEl.getBoundingClientRect();
-                      // Detect grid layout: any sibling sharing this row's Y?
-                      const parent = cardEl.parentElement;
-                      let isGrid = false;
-                      if (parent) {
-                        for (const sib of parent.children) {
-                          if (sib === cardEl) continue;
-                          const sr = (
-                            sib as HTMLElement
-                          ).getBoundingClientRect();
-                          if (Math.abs(sr.top - rect.top) < 5) {
-                            isGrid = true;
-                            break;
-                          }
-                        }
-                      }
-                      const before = isGrid
-                        ? e.clientX < rect.left + rect.width / 2
-                        : e.clientY < rect.top + rect.height / 2;
-                      setDropTarget({
-                        id: link.id,
-                        before,
-                        horizontal: isGrid,
-                      });
-                    }}
-                    onDrop={(e) => {
-                      if (!draggingId || draggingId === link.id) return;
-                      e.preventDefault();
-                      handleReorder(
-                        draggingId,
-                        link.id,
-                        dropTarget?.before ?? true,
-                      );
-                      setDraggingId(null);
-                      setDropTarget(null);
-                    }}
                     style={{ opacity: isDragging ? 0.4 : 1 }}
                   >
                     {showInsertBefore && horizontal && (
@@ -1703,7 +1685,7 @@ function LinksTab({
                       link={link}
                       hydration={hydrations[link.url]}
                       isLoading={
-                        hydrationPending.has(link.url) && !hydrations[link.url]
+                        !hydrations[link.url] && refreshingLinks.has(link.url)
                       }
                       onDelete={() => onDelete(link.id)}
                     />

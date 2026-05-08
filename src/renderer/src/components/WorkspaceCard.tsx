@@ -1,16 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import type {
   Workspace,
   PRStatus,
   Item,
   WorkspaceLink,
 } from "../../../shared/types";
+import {
+  usePRsForWorkspace,
+  useAgentStatus,
+  useRecap,
+  useTmuxSession,
+} from "../store/selectors";
 
 interface Props {
   workspace: Workspace;
-  prStatuses: PRStatus[];
-  tmuxRunning: boolean;
-  agentStatus: "working" | "needs-input" | "idle" | "no-session";
   onClick: (e: React.MouseEvent) => void;
   selected?: boolean;
   draggingPR: PRStatus | null;
@@ -44,9 +47,6 @@ const REVIEW_CLASS: Record<string, string> = {
 
 export function WorkspaceCard({
   workspace,
-  prStatuses,
-  tmuxRunning,
-  agentStatus,
   onClick,
   selected = false,
   draggingPR,
@@ -59,59 +59,22 @@ export function WorkspaceCard({
   onWorkspaceDragEnd,
 }: Props) {
   const [isOver, setIsOver] = useState(false);
-  const [fetchedPRs, setFetchedPRs] = useState<PRStatus[]>([]);
+  const agentStatus = useAgentStatus(workspace.id);
+  const recap = useRecap(workspace.id);
+  const tmuxRunning = useTmuxSession(workspace.tmuxSession);
 
   const linkedKeys = new Set(workspace.prs.map((p) => `${p.repo}-${p.number}`));
-  const allKnown = [...prStatuses, ...fetchedPRs];
-  const knownByKey = new Map<string, PRStatus>();
-  for (const pr of allKnown) {
-    const key = `${pr.repo ?? ""}-${pr.number}`;
-    if (linkedKeys.has(key) && !knownByKey.has(key)) knownByKey.set(key, pr);
-  }
-  // Render in workspace.prs order so the user can reorder which PR is "primary".
-  const linkedPRs = workspace.prs
-    .map((p) => knownByKey.get(`${p.repo}-${p.number}`))
+  const linkedSlots = usePRsForWorkspace(workspace);
+  const linkedPRs = linkedSlots
+    .map((s) => s.pr)
     .filter((pr): pr is PRStatus => pr !== undefined);
-  const loadingLinkedPRs = workspace.prs.filter(
-    (p) =>
-      !linkedPRs.find((lp) => lp.repo === p.repo && lp.number === p.number),
-  );
+  const loadingLinkedPRs = linkedSlots
+    .filter((s) => s.pr === undefined)
+    .map((s) => s.ref);
   const totalPRCount = linkedPRs.length + loadingLinkedPRs.length;
   const primaryPR = linkedPRs[0];
   const primaryLoading = !primaryPR ? loadingLinkedPRs[0] : undefined;
   const overflowCount = totalPRCount > 1 ? totalPRCount - 1 : 0;
-
-  useEffect(() => {
-    // Cache any linked PRs currently in prStatuses so they survive a
-    // temporary drop (e.g. transient fetchPR failure during sync).
-    const fromStatuses = prStatuses.filter((pr) =>
-      workspace.prs.some((p) => p.repo === pr.repo && p.number === pr.number),
-    );
-    if (fromStatuses.length > 0) {
-      setFetchedPRs((prev) => {
-        const existing = new Set(prev.map((p) => `${p.repo}-${p.number}`));
-        const toAdd = fromStatuses.filter(
-          (pr) => !existing.has(`${pr.repo}-${pr.number}`),
-        );
-        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
-      });
-    }
-
-    async function fetchMissing() {
-      const missing = workspace.prs.filter(
-        (p) =>
-          !allKnown.find((k) => k.repo === p.repo && k.number === p.number),
-      );
-      if (missing.length === 0) return;
-      const results = await Promise.all(
-        missing.map((p) => window.api.github.fetchPR(p.repo, p.number)),
-      );
-      const valid = results.filter((r): r is PRStatus => r !== null);
-      if (valid.length > 0) setFetchedPRs((prev) => [...prev, ...valid]);
-    }
-    fetchMissing();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace.id, workspace.prs, prStatuses]);
 
   const alreadyLinked = draggingPR
     ? linkedKeys.has(`${draggingPR.repo ?? ""}-${draggingPR.number}`)
@@ -209,24 +172,20 @@ export function WorkspaceCard({
             <span className="pr-number">#{primaryLoading.number}</span>
             <span className="pr-title">Loading…</span>
           </div>
-        ) : workspace.recap?.text ? (
+        ) : recap?.text ? (
           <div className="pr-row pr-row-recap">
             <span className="text-xs text-fg-muted line-clamp-2 leading-snug">
-              {workspace.recap.text}
+              {recap.text}
             </span>
           </div>
         ) : (
           <div className="pr-row pr-row-empty">
-            <span className="text-fg-muted text-sm italic">
-              No PRs linked
-            </span>
+            <span className="text-fg-muted text-sm italic">No PRs linked</span>
           </div>
         )}
         {overflowCount > 0 ? (
           <div className="pr-row pr-row-overflow">
-            <span className="text-xs text-fg-muted">
-              +{overflowCount} more
-            </span>
+            <span className="text-xs text-fg-muted">+{overflowCount} more</span>
           </div>
         ) : (
           <div className="pr-row pr-row-overflow" />

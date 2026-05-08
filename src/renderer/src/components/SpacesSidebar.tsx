@@ -31,12 +31,6 @@ const ACTIVE_GROUP_ID = "active";
 interface Props {
   wing: Wing | null;
   workspaces: Workspace[];
-  prStatuses: PRStatus[];
-  tmuxSessions: string[];
-  agentStatuses: Record<
-    string,
-    "working" | "needs-input" | "idle" | "no-session"
-  >;
   hiddenStatuses: Set<string>;
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -74,9 +68,6 @@ interface Props {
 export function SpacesSidebar({
   wing,
   workspaces,
-  prStatuses,
-  tmuxSessions,
-  agentStatuses,
   hiddenStatuses,
   expanded,
   onToggleExpanded,
@@ -554,10 +545,10 @@ export function SpacesSidebar({
                   >
                     {section.spaces.map((ws) => {
                       const draggedSection = draggingWorkspace
-                        ? (draggingWorkspace.groupId &&
+                        ? draggingWorkspace.groupId &&
                           validCustomIds.has(draggingWorkspace.groupId)
-                            ? draggingWorkspace.groupId
-                            : ACTIVE_GROUP_ID)
+                          ? draggingWorkspace.groupId
+                          : ACTIVE_GROUP_ID
                         : null;
                       const sameSection =
                         draggingWorkspace !== null &&
@@ -600,31 +591,25 @@ export function SpacesSidebar({
                         >
                           <WorkspaceCard
                             workspace={ws}
-                            prStatuses={prStatuses}
-                            tmuxRunning={
-                              ws.tmuxSession
-                                ? tmuxSessions.includes(ws.tmuxSession)
-                                : false
-                            }
-                            agentStatus={
-                              agentStatuses[ws.id] ?? "no-session"
-                            }
                             selected={selectedIds.has(ws.id)}
                             onClick={(e) => onSelect(ws.id, e)}
                             draggingPR={
-                              draggingWorkspace || dragSourceWorkspaceId === ws.id
+                              draggingWorkspace ||
+                              dragSourceWorkspaceId === ws.id
                                 ? null
                                 : draggingPR
                             }
                             onDrop={(pr) => onDropPR(ws, pr)}
                             draggingItem={
-                              draggingWorkspace || dragSourceWorkspaceId === ws.id
+                              draggingWorkspace ||
+                              dragSourceWorkspaceId === ws.id
                                 ? null
                                 : draggingItem
                             }
                             onDropItem={(note) => onDropItem(ws, note)}
                             draggingLink={
-                              draggingWorkspace || dragSourceWorkspaceId === ws.id
+                              draggingWorkspace ||
+                              dragSourceWorkspaceId === ws.id
                                 ? null
                                 : draggingLink
                             }
@@ -752,9 +737,7 @@ function BulkActionBar({
 
   return (
     <div className="border-t border-line px-3 py-2 flex items-center gap-2 bg-bg-card">
-      <span className="text-sm text-fg font-semibold">
-        {count} selected
-      </span>
+      <span className="text-sm text-fg font-semibold">{count} selected</span>
 
       {/* Move to group */}
       <div className="relative ml-auto">
@@ -775,7 +758,12 @@ function BulkActionBar({
             />
             <div
               className="gear-menu"
-              style={{ minWidth: 180, bottom: "100%", top: "auto", marginBottom: 4 }}
+              style={{
+                minWidth: 180,
+                bottom: "100%",
+                top: "auto",
+                marginBottom: 4,
+              }}
             >
               <button
                 className="gear-menu-item"
@@ -827,7 +815,12 @@ function BulkActionBar({
             />
             <div
               className="gear-menu"
-              style={{ minWidth: 160, bottom: "100%", top: "auto", marginBottom: 4 }}
+              style={{
+                minWidth: 160,
+                bottom: "100%",
+                top: "auto",
+                marginBottom: 4,
+              }}
             >
               {(["active", "blocked", "done", "archived"] as const).map((s) => (
                 <button

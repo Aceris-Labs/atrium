@@ -3,9 +3,11 @@ import { join } from "path";
 import { registerIpcHandlers } from "./ipc";
 import { closeAllMcpClients } from "./mcp/client";
 import { startWingsWatcher } from "./wingsWatcher";
+import { cacheStore, orchestrator } from "./cache";
 
 let mainWindow: BrowserWindow | null = null;
 let wingsWatcher: { stop: () => void } | null = null;
+let cacheUnsub: (() => void) | null = null;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -39,6 +41,15 @@ app.whenReady().then(() => {
   createWindow();
   wingsWatcher = startWingsWatcher(() => mainWindow);
 
+  // Forward every cache event to the renderer. Single subscription for the
+  // process lifetime — the listener tolerates a closed/replaced window.
+  cacheUnsub = cacheStore.subscribe((event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("cache:event", event);
+    }
+  });
+  orchestrator.bootstrap();
+
   globalShortcut.register("CommandOrControl+Shift+O", () => {
     if (!mainWindow) {
       createWindow();
@@ -66,4 +77,6 @@ app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   closeAllMcpClients();
   wingsWatcher?.stop();
+  cacheUnsub?.();
+  orchestrator.shutdown();
 });

@@ -3,7 +3,40 @@ import type { Workspace, PRStatus, LinkStatus } from "../../shared/types";
 import { findClaudePath } from "../connectors/strategy";
 import { listWorkspaces } from "../store";
 import { fetchPR } from "../github";
-import { hydrateLinks } from "../linkHydration";
+import { hydrateOne } from "../connectors/registry";
+import { getCached, isFresh, setCached } from "../linkCache";
+import { cacheStore } from "../cache";
+import { prKey } from "../../shared/cacheTypes";
+
+/** Fetches link metadata for the given URLs. Reads the on-disk linkCache and
+ *  refetches anything stale via hydrateOne. Each fresh result is written back
+ *  to both the disk cache and the in-memory cacheStore so subsequent renders
+ *  pick it up. */
+async function ensureLinkStatuses(
+  urls: string[],
+): Promise<Record<string, LinkStatus>> {
+  const result: Record<string, LinkStatus> = {};
+  const stale: string[] = [];
+  for (const url of urls) {
+    const cached = getCached(url);
+    if (isFresh(cached)) {
+      result[url] = cached!;
+    } else {
+      stale.push(url);
+    }
+  }
+  const settled = await Promise.allSettled(
+    stale.map(async (url) => [url, await hydrateOne(url)] as const),
+  );
+  for (const s of settled) {
+    if (s.status !== "fulfilled") continue;
+    const [url, status] = s.value;
+    result[url] = status;
+    setCached(url, status);
+    cacheStore.setLink(url, status);
+  }
+  return result;
+}
 
 function buildPrompt(
   workspace: Workspace,
@@ -39,7 +72,9 @@ function buildPrompt(
       ? items
           .map((i) => {
             const head = `- [${i.done ? "x" : " "}] ${i.title}`;
-            return i.body ? `${head}\n  ${i.body.replace(/\n/g, "\n  ")}` : head;
+            return i.body
+              ? `${head}\n  ${i.body.replace(/\n/g, "\n  ")}`
+              : head;
           })
           .join("\n")
       : "None";
@@ -122,9 +157,7 @@ function buildWingPrompt(
     const doneCount = items.filter((i) => i.done).length;
     const itemLines =
       items.length > 0
-        ? items
-            .map((i) => `  - [${i.done ? "x" : " "}] ${i.title}`)
-            .join("\n")
+        ? items.map((i) => `  - [${i.done ? "x" : " "}] ${i.title}`).join("\n")
         : "  None";
 
     const links = workspace.links ?? [];
@@ -205,7 +238,7 @@ export async function generateWingSummary(
     ...new Set(workspaces.flatMap((w) => w.links.map((l) => l.url))),
   ];
   const linkStatuses: Record<string, LinkStatus> =
-    urls.length > 0 ? await hydrateLinks(urls) : {};
+    urls.length > 0 ? await ensureLinkStatuses(urls) : {};
 
   const claudePath = findClaudePath();
   if (!claudePath) throw new Error("claude CLI not found");
@@ -249,15 +282,39 @@ export async function generateWingSummary(
 
 /**
  * Generate a plain-text markdown summary of the workspace by spawning the
- * claude CLI with a structured prompt. Returns the summary text.
+ * claude CLI with a structured prompt. Returns the summary text. Reads PR
+ * card-level data and link metadata from the cache; missing entries are
+ * fetched on the fly so the digest is never blocked on a stale cache.
  */
 export async function generateWorkspaceDigest(
   workspace: Workspace,
-  prStatuses: PRStatus[],
-  linkStatuses: Record<string, LinkStatus>,
 ): Promise<string> {
   const claudePath = findClaudePath();
   if (!claudePath) throw new Error("claude CLI not found");
+
+  const cache = cacheStore.snapshot();
+  const prStatuses: PRStatus[] = [];
+  for (const ref of workspace.prs) {
+    const cached = cache.prs[prKey(ref.repo, ref.number)];
+    if (cached) {
+      prStatuses.push(cached);
+      continue;
+    }
+    const fetched = await fetchPR(ref.repo, ref.number);
+    if (fetched) prStatuses.push(fetched);
+  }
+
+  const urls = workspace.links?.map((l) => l.url) ?? [];
+  const linkStatuses: Record<string, LinkStatus> = {};
+  for (const url of urls) {
+    const cached = cache.links[url];
+    if (cached) linkStatuses[url] = cached;
+  }
+  const missing = urls.filter((u) => !linkStatuses[u]);
+  if (missing.length > 0) {
+    const fresh = await ensureLinkStatuses(missing);
+    Object.assign(linkStatuses, fresh);
+  }
 
   const prompt = buildPrompt(workspace, prStatuses, linkStatuses);
 

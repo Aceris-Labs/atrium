@@ -9,6 +9,7 @@ import type {
   PRStatus,
   LinkStatus,
 } from "../shared/types";
+import type { CacheEvent } from "../shared/cacheTypes";
 
 const api: WindowApi = {
   wings: {
@@ -41,12 +42,6 @@ const api: WindowApi = {
       ipcRenderer.invoke("workspaces:move", fromWingId, toWingId, id),
   },
   github: {
-    allPRs: (wingId: string) => ipcRenderer.invoke("github:allPRs", wingId),
-    reviewThreads: (wingId: string) =>
-      ipcRenderer.invoke("github:reviewThreads", wingId),
-    tmuxSessions: () => ipcRenderer.invoke("github:tmuxSessions"),
-    fetchPR: (repo: string, number: number) =>
-      ipcRenderer.invoke("github:fetchPR", repo, number),
     defaultRepo: (wingId: string) =>
       ipcRenderer.invoke("github:defaultRepo", wingId),
   },
@@ -55,17 +50,8 @@ const api: WindowApi = {
       ipcRenderer.invoke("workspace:launch", wingId, workspace),
     stop: (workspaceId: string) =>
       ipcRenderer.invoke("workspace:stop", workspaceId),
-    generateDigest: (
-      workspace: Workspace,
-      prStatuses: PRStatus[],
-      linkStatuses: Record<string, LinkStatus>,
-    ) =>
-      ipcRenderer.invoke(
-        "workspace:generateDigest",
-        workspace,
-        prStatuses,
-        linkStatuses,
-      ),
+    generateDigest: (workspace: Workspace) =>
+      ipcRenderer.invoke("workspace:generateDigest", workspace),
     createWorktree: (
       wingId: string,
       workspaceId: string,
@@ -104,11 +90,7 @@ const api: WindowApi = {
     },
   },
   agents: {
-    statuses: (sessions: Record<string, AgentSessionInfo | undefined>) =>
-      ipcRenderer.invoke("agents:statuses", sessions),
     sessions: () => ipcRenderer.invoke("agents:sessions"),
-    recap: (info: AgentSessionInfo | undefined) =>
-      ipcRenderer.invoke("agents:recap", info),
   },
   watchedPRs: {
     list: (wingId: string) => ipcRenderer.invoke("watchedPRs:list", wingId),
@@ -152,10 +134,23 @@ const api: WindowApi = {
     disableCloudMcp: (source: ConnectorSource) =>
       ipcRenderer.invoke("connectors:cloud-mcp:disable", source),
   },
-  links: {
-    getCached: (urls: string[]) => ipcRenderer.invoke("links:getCached", urls),
-    hydrate: (urls: string[]) => ipcRenderer.invoke("links:hydrate", urls),
-    refresh: (url: string) => ipcRenderer.invoke("links:refresh", url),
+  cache: {
+    snapshot: () => ipcRenderer.invoke("cache:snapshot"),
+    setActiveWing: (wingId: string | null) =>
+      ipcRenderer.invoke("cache:setActiveWing", wingId),
+    refreshAll: () => ipcRenderer.invoke("cache:refreshAll"),
+    refreshLinked: () => ipcRenderer.invoke("cache:refreshLinked"),
+    requestPRRefresh: (repo: string, number: number) =>
+      ipcRenderer.invoke("cache:requestPRRefresh", repo, number),
+    requestLinkRefresh: (url: string) =>
+      ipcRenderer.invoke("cache:requestLinkRefresh", url),
+    onEvent: (handler: (event: CacheEvent) => void) => {
+      const wrapped = (_: unknown, event: CacheEvent) => handler(event);
+      ipcRenderer.on("cache:event", wrapped);
+      return () => {
+        ipcRenderer.removeListener("cache:event", wrapped);
+      };
+    },
   },
 };
 
