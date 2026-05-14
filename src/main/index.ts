@@ -36,6 +36,23 @@ function createWindow(): void {
   });
 }
 
+function broadcastError(message: string): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("app:error", message);
+  }
+}
+
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+  broadcastError(err instanceof Error ? err.message : String(err));
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  broadcastError(msg);
+});
+
 app.whenReady().then(() => {
   registerIpcHandlers();
   createWindow();

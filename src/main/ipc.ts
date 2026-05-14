@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
 import {
   listWorkspaces,
   createWorkspace,
@@ -54,6 +55,28 @@ import type {
   ConnectorSource,
 } from "../shared/types";
 
+type IpcHandler = (
+  event: IpcMainInvokeEvent,
+  ...args: any[]
+) => unknown | Promise<unknown>;
+
+/**
+ * Wraps `ipcMain.handle` so thrown errors are logged main-side with the
+ * channel name before propagating to the renderer. The renderer's global
+ * `unhandledrejection` listener then surfaces them as toasts.
+ */
+function safeHandle(channel: string, handler: IpcHandler): void {
+  ipcMain.handle(channel, async (event, ...args) => {
+    try {
+      return await handler(event, ...args);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[ipc:${channel}]`, err);
+      throw new Error(msg);
+    }
+  });
+}
+
 function resolveWorktreePath(inputPath: string, baseDir: string): string {
   if (inputPath.startsWith("~/"))
     return pathJoin(homedir(), inputPath.slice(2));
@@ -64,8 +87,8 @@ function resolveWorktreePath(inputPath: string, baseDir: string): string {
 
 export function registerIpcHandlers(): void {
   // ── Wings ────────────────────────────────────────────────────────────────
-  ipcMain.handle("wings:list", () => listWings());
-  ipcMain.handle(
+  safeHandle("wings:list", () => listWings());
+  safeHandle(
     "wings:create",
     (
       _,
@@ -76,18 +99,16 @@ export function registerIpcHandlers(): void {
       },
     ) => createWing(data),
   );
-  ipcMain.handle("wings:update", (_, wing: Wing) => updateWing(wing));
-  ipcMain.handle("wings:reorder", (_, orderedIds: string[]) =>
+  safeHandle("wings:update", (_, wing: Wing) => updateWing(wing));
+  safeHandle("wings:reorder", (_, orderedIds: string[]) =>
     reorderWings(orderedIds),
   );
-  ipcMain.handle("wings:setActive", (_, id: string) => setActiveWing(id));
-  ipcMain.handle("wings:delete", (_, id: string) => deleteWing(id));
+  safeHandle("wings:setActive", (_, id: string) => setActiveWing(id));
+  safeHandle("wings:delete", (_, id: string) => deleteWing(id));
 
   // ── Workspaces (wing-scoped) ─────────────────────────────────────────────
-  ipcMain.handle("workspaces:list", (_, wingId: string) =>
-    listWorkspaces(wingId),
-  );
-  ipcMain.handle(
+  safeHandle("workspaces:list", (_, wingId: string) => listWorkspaces(wingId));
+  safeHandle(
     "workspaces:create",
     (
       _,
@@ -95,28 +116,24 @@ export function registerIpcHandlers(): void {
       data: Omit<Workspace, "id" | "createdAt" | "updatedAt">,
     ) => createWorkspace(wingId, data),
   );
-  ipcMain.handle(
-    "workspaces:update",
-    (_, wingId: string, workspace: Workspace) =>
-      updateWorkspace(wingId, workspace),
+  safeHandle("workspaces:update", (_, wingId: string, workspace: Workspace) =>
+    updateWorkspace(wingId, workspace),
   );
-  ipcMain.handle("workspaces:delete", (_, wingId: string, id: string) =>
+  safeHandle("workspaces:delete", (_, wingId: string, id: string) =>
     deleteWorkspace(wingId, id),
   );
-  ipcMain.handle(
+  safeHandle(
     "workspaces:updateMany",
     (_, wingId: string, updates: Workspace[]) =>
       updateWorkspaces(wingId, updates),
   );
-  ipcMain.handle("workspaces:deleteMany", (_, wingId: string, ids: string[]) =>
+  safeHandle("workspaces:deleteMany", (_, wingId: string, ids: string[]) =>
     deleteWorkspaces(wingId, ids),
   );
-  ipcMain.handle(
-    "workspaces:reorder",
-    (_, wingId: string, orderedIds: string[]) =>
-      reorderWorkspaces(wingId, orderedIds),
+  safeHandle("workspaces:reorder", (_, wingId: string, orderedIds: string[]) =>
+    reorderWorkspaces(wingId, orderedIds),
   );
-  ipcMain.handle(
+  safeHandle(
     "workspaces:move",
     (_, fromWingId: string, toWingId: string, id: string) =>
       moveWorkspace(fromWingId, toWingId, id),
@@ -126,23 +143,21 @@ export function registerIpcHandlers(): void {
   // PR fetching and tmux session listing are now driven by cache refreshers
   // (see src/main/cache/). Only the wing → default-repo lookup remains as a
   // one-shot capability probe.
-  ipcMain.handle("github:defaultRepo", (_, wingId: string) =>
+  safeHandle("github:defaultRepo", (_, wingId: string) =>
     getDefaultRepo(wingId),
   );
 
   // ── Workspace launch (wing-scoped for launch profile) ────────────────────
-  ipcMain.handle(
-    "workspace:launch",
-    (_, wingId: string, workspace: Workspace) =>
-      launchWorkspace(wingId, workspace),
+  safeHandle("workspace:launch", (_, wingId: string, workspace: Workspace) =>
+    launchWorkspace(wingId, workspace),
   );
-  ipcMain.handle("workspace:stop", (_, workspaceId: string) =>
+  safeHandle("workspace:stop", (_, workspaceId: string) =>
     stopSession(workspaceId),
   );
-  ipcMain.handle("workspace:generateDigest", (_, workspace: Workspace) =>
+  safeHandle("workspace:generateDigest", (_, workspace: Workspace) =>
     generateWorkspaceDigest(workspace),
   );
-  ipcMain.handle(
+  safeHandle(
     "workspace:createWorktree",
     async (
       _,
@@ -214,7 +229,7 @@ export function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle(
+  safeHandle(
     "workspace:deleteWorktree",
     async (_, wingId: string, workspaceId: string, gitRemove: boolean) => {
       const workspaces = listWorkspaces(wingId);
@@ -244,83 +259,74 @@ export function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle(
-    "wing:summarize",
-    (_, wingId: string, workspaceIds: string[]) =>
-      generateWingSummary(wingId, workspaceIds),
+  safeHandle("wing:summarize", (_, wingId: string, workspaceIds: string[]) =>
+    generateWingSummary(wingId, workspaceIds),
   );
 
   // ── Agents ───────────────────────────────────────────────────────────────
   // Agent status + recap flow through the cache via the AgentsRefresher.
   // `agents:sessions` is kept as a one-shot capability probe for the
   // session-picker modal.
-  ipcMain.handle("agents:sessions", () => listAvailableSessions());
+  safeHandle("agents:sessions", () => listAvailableSessions());
 
   // ── Watched PRs (wing-scoped) ────────────────────────────────────────────
-  ipcMain.handle("watchedPRs:list", (_, wingId: string) =>
-    listWatchedPRs(wingId),
-  );
-  ipcMain.handle(
+  safeHandle("watchedPRs:list", (_, wingId: string) => listWatchedPRs(wingId));
+  safeHandle(
     "watchedPRs:add",
     async (_, wingId: string, pr: { number: number; repo: string }) => {
       const result = await addWatchedPR(wingId, pr);
-      void orchestrator.refreshWatched();
+      void orchestrator.refreshExplicit();
       return result;
     },
   );
-  ipcMain.handle(
-    "watchedPRs:remove",
-    async (_, wingId: string, num: number) => {
-      const result = await removeWatchedPR(wingId, num);
-      void orchestrator.refreshWatched();
-      return result;
-    },
-  );
+  safeHandle("watchedPRs:remove", async (_, wingId: string, num: number) => {
+    const result = await removeWatchedPR(wingId, num);
+    void orchestrator.refreshExplicit();
+    return result;
+  });
 
   // ── Config (global only) ─────────────────────────────────────────────────
-  ipcMain.handle("config:get", () => getConfig());
-  ipcMain.handle("config:set", (_, partial) => setConfig(partial));
+  safeHandle("config:get", () => getConfig());
+  safeHandle("config:set", (_, partial) => setConfig(partial));
 
   // ── Setup detection ──────────────────────────────────────────────────────
-  ipcMain.handle("setup:detect", () => detectTools());
+  safeHandle("setup:detect", () => detectTools());
 
   // ── Filesystem helpers (for path completion) ─────────────────────────────
-  ipcMain.handle("fs:listDirs", (_, partial: string) => listDirs(partial));
+  safeHandle("fs:listDirs", (_, partial: string) => listDirs(partial));
 
   // ── Git (directory-scoped repo detection) ────────────────────────────────
-  ipcMain.handle("git:detectRepo", (_, dirPath: string) => detectRepo(dirPath));
-  ipcMain.handle("git:currentBranch", (_, dirPath: string) =>
+  safeHandle("git:detectRepo", (_, dirPath: string) => detectRepo(dirPath));
+  safeHandle("git:currentBranch", (_, dirPath: string) =>
     currentBranch(dirPath),
   );
-  ipcMain.handle("git:listWorktrees", (_, dirPath: string) =>
+  safeHandle("git:listWorktrees", (_, dirPath: string) =>
     listWorktrees(dirPath),
   );
 
   // ── Connectors ───────────────────────────────────────────────────────────
-  ipcMain.handle("connectors:list", () => listConnectors());
-  ipcMain.handle("connectors:strategies", (_, source: ConnectorSource) =>
+  safeHandle("connectors:list", () => listConnectors());
+  safeHandle("connectors:strategies", (_, source: ConnectorSource) =>
     listConnectorStrategies(source),
   );
-  ipcMain.handle(
-    "connectors:set",
-    (_, source: ConnectorSource, config: unknown) =>
-      setConnectorConfig(source, config),
+  safeHandle("connectors:set", (_, source: ConnectorSource, config: unknown) =>
+    setConnectorConfig(source, config),
   );
-  ipcMain.handle("connectors:remove", (_, source: ConnectorSource) =>
+  safeHandle("connectors:remove", (_, source: ConnectorSource) =>
     removeConnectorConfig(source),
   );
-  ipcMain.handle(
+  safeHandle(
     "connectors:test",
     (_, source: ConnectorSource, config?: unknown) =>
       testConnector(source, config),
   );
-  ipcMain.handle("connectors:cloud-mcp:enable", (_, source: ConnectorSource) =>
+  safeHandle("connectors:cloud-mcp:enable", (_, source: ConnectorSource) =>
     enableCloudMcp(source),
   );
-  ipcMain.handle("connectors:cloud-mcp:disable", (_, source: ConnectorSource) =>
+  safeHandle("connectors:cloud-mcp:disable", (_, source: ConnectorSource) =>
     disableCloudMcp(source),
   );
-  ipcMain.handle("connectors:oauth", async (_, source: ConnectorSource) => {
+  safeHandle("connectors:oauth", async (_, source: ConnectorSource) => {
     if (source !== "linear") {
       return { ok: false, error: "OAuth not supported for this connector" };
     }
@@ -339,16 +345,17 @@ export function registerIpcHandlers(): void {
   });
 
   // ── Cache bridge (renderer mirror) ───────────────────────────────────────
-  ipcMain.handle("cache:snapshot", () => cacheStore.snapshot());
-  ipcMain.handle("cache:setActiveWing", (_, wingId: string | null) =>
+  safeHandle("cache:snapshot", () => cacheStore.snapshot());
+  safeHandle("cache:setActiveWing", (_, wingId: string | null) =>
     orchestrator.setActiveWing(wingId),
   );
-  ipcMain.handle("cache:refreshAll", () => orchestrator.refreshAll());
-  ipcMain.handle("cache:refreshLinked", () => orchestrator.refreshLinked());
-  ipcMain.handle("cache:requestPRRefresh", (_, repo: string, number: number) =>
+  safeHandle("cache:refreshAll", () => orchestrator.refreshAll());
+  safeHandle("cache:refreshPRs", () => orchestrator.refreshPRs());
+  safeHandle("cache:refreshExplicit", () => orchestrator.refreshExplicit());
+  safeHandle("cache:requestPRRefresh", (_, repo: string, number: number) =>
     orchestrator.refreshPRKey(repo, number),
   );
-  ipcMain.handle("cache:requestLinkRefresh", (_, url: string) =>
+  safeHandle("cache:requestLinkRefresh", (_, url: string) =>
     orchestrator.refreshLink(url),
   );
 }

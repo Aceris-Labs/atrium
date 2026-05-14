@@ -1,4 +1,5 @@
 import { Children, useEffect, useMemo, useRef, useState } from "react";
+import { useToast } from "./components/Toast";
 import {
   ArrowPathIcon,
   Cog6ToothIcon,
@@ -20,7 +21,12 @@ import { WingSummaryModal } from "./components/WingSummaryModal";
 import { WatchPRModal } from "./components/WatchPRModal";
 import { SpacesSidebar } from "./components/SpacesSidebar";
 import { ItemsTab } from "./components/ItemsTab";
-import { usePRsByTag } from "./store/selectors";
+import {
+  useAuthoredOpen,
+  useReviewRequestedOpen,
+  useReviewedOpen,
+  useWatched,
+} from "./store/selectors";
 import type {
   PRStatus,
   Workspace,
@@ -34,6 +40,7 @@ import type {
 type MainTab = "inbox" | "prs" | "items";
 
 export default function App() {
+  const toast = useToast();
   const [wings, setWings] = useState<Wing[]>([]);
   const [activeWingId, setActiveWingId] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -61,10 +68,10 @@ export default function App() {
   wingsRef.current = wings;
 
   // PRs flow through the main-process cache; render directly from selectors.
-  const myPRs = usePRsByTag(activeWingId, "mine");
-  const reviewPRs = usePRsByTag(activeWingId, "review");
-  const reviewedPRs = usePRsByTag(activeWingId, "reviewed");
-  const watchedPRStatuses = usePRsByTag(activeWingId, "watching");
+  const openMyPRs = useAuthoredOpen(activeWingId);
+  const openReviews = useReviewRequestedOpen(activeWingId);
+  const reviewedOpen = useReviewedOpen(activeWingId);
+  const watchedPRStatuses = useWatched(activeWingId);
 
   async function loadWorkspaces(wingId: string) {
     const ws = await window.api.workspaces.list(wingId);
@@ -245,7 +252,7 @@ export default function App() {
       }),
     );
     await Promise.all(updates);
-    void window.api.cache.refreshLinked();
+    void window.api.cache.refreshExplicit();
     setDragSourceWsId(null);
   }
 
@@ -391,8 +398,9 @@ export default function App() {
     try {
       await window.api.workspaces.reorder(activeWingId, ids);
     } catch (e) {
-      console.error("Reorder failed", e);
-      alert("Reorder failed: " + (e instanceof Error ? e.message : String(e)));
+      toast.error(
+        "Reorder failed: " + (e instanceof Error ? e.message : String(e)),
+      );
       // Roll back local state by re-listing from disk
       const fresh = await window.api.workspaces.list(activeWingId);
       setWorkspaces(fresh);
@@ -405,8 +413,9 @@ export default function App() {
     try {
       await window.api.workspaces.deleteMany(activeWingId, ids);
     } catch (e) {
-      console.error("Bulk delete failed", e);
-      alert("Delete failed: " + (e instanceof Error ? e.message : String(e)));
+      toast.error(
+        "Delete failed: " + (e instanceof Error ? e.message : String(e)),
+      );
       return;
     }
     setWorkspaces((prev) => prev.filter((w) => !selectedIds.has(w.id)));
@@ -457,13 +466,9 @@ export default function App() {
     setHiddenStatusesByWing((prev) => new Map(prev).set(activeWingId, next));
   }
 
-  const openReviews = reviewPRs.filter((pr) => pr.state === "open");
-  const openMyPRs = myPRs.filter((pr) => pr.state === "open");
-
   // Inbox items aggregated from every connector source. For now only GitHub
   // awaiting-reply threads — Notion/Linear/etc. mappers slot in here later.
   const inboxItems: InboxItem[] = (() => {
-    const reviewedOpen = reviewedPRs.filter((pr) => pr.state === "open");
     const prWsMap = buildPRWorkspaceMap(workspaces);
     const all = awaitingThreadsToInbox(
       [...openReviews, ...openMyPRs, ...reviewedOpen],
@@ -662,15 +667,14 @@ export default function App() {
                       <PRsPanel
                         unlinkedReviews={openReviews}
                         unlinkedMyPRs={openMyPRs}
-                        reviewedPRs={reviewedPRs.filter(
-                          (pr) => pr.state === "open",
-                        )}
+                        reviewedPRs={reviewedOpen}
                         watchedPRStatuses={watchedPRStatuses}
                         loadingWatched={loadingWatched}
                         draggingPR={draggingPR}
                         setDraggingPR={setDraggingPR}
                         onWatchClick={() => setShowWatchModal(true)}
                         onRemoveWatched={handleRemoveWatched}
+                        onRefreshPRs={() => window.api.cache.refreshPRs()}
                         prKey={prKey}
                         spaceTitleFor={(pr) => prSpaceTitles.get(prKey(pr))}
                       />
@@ -783,6 +787,7 @@ interface PRsPanelProps {
   setDraggingPR: (pr: PRStatus | null) => void;
   onWatchClick: () => void;
   onRemoveWatched: (num: number) => void;
+  onRefreshPRs: () => Promise<void>;
   prKey: (pr: PRStatus) => string;
   spaceTitleFor: (pr: PRStatus) => string | undefined;
 }
@@ -797,11 +802,35 @@ function PRsPanel({
   setDraggingPR,
   onWatchClick,
   onRemoveWatched,
+  onRefreshPRs,
   prKey,
   spaceTitleFor,
 }: PRsPanelProps) {
+  const [refreshing, setRefreshing] = useState(false);
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await onRefreshPRs();
+    } finally {
+      setRefreshing(false);
+    }
+  }
   return (
     <div className="flex flex-col gap-7">
+      <div className="flex items-center justify-end">
+        <button
+          className="btn btn-ghost btn-sm flex items-center gap-1.5"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          title="Refresh PRs from GitHub"
+        >
+          <ArrowPathIcon
+            className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`}
+          />
+          Refresh
+        </button>
+      </div>
       <PRSection
         title="Needs your review"
         count={unlinkedReviews.length}

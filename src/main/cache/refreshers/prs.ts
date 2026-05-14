@@ -1,16 +1,21 @@
 import { TTLRefresher } from "../refresher";
 import { cacheStore } from "../store";
-import { listAllPRs, listPRReviewThreads, fetchPR } from "../../github";
+import {
+  listAllPRs,
+  listPRReviewThreads,
+  fetchExplicitPRs,
+} from "../../github";
 import { listWatchedPRs, listWorkspaces } from "../../store";
 import { prKey } from "../../../shared/cacheTypes";
 import type { PRStatus } from "../../../shared/types";
 
 const PR_BUCKETS_TTL_MS = 5 * 60_000;
-const WATCHED_TTL_MS = 5 * 60_000;
-const WORKSPACE_LINKED_TTL_MS = 5 * 60_000;
+const EXPLICIT_TTL_MS = 5 * 60_000;
 
 /** Fetches authored / review-requested / reviewed PRs for a wing, plus the
- *  review-threads enrichment, and writes both to the cache. */
+ *  review-threads enrichment, and writes both to the cache. State filter is
+ *  no longer applied to the searches — the cache holds the universe, the
+ *  renderer slices by state via selectors. */
 export class PRBucketsRefresher extends TTLRefresher {
   constructor(private wingId: string) {
     super(PR_BUCKETS_TTL_MS);
@@ -37,9 +42,6 @@ export class PRBucketsRefresher extends TTLRefresher {
     writeBucket("review", buckets.reviewRequested);
     writeBucket("reviewed", buckets.reviewed);
 
-    // Review threads run in parallel with the rest of the orchestrator's work
-    // — we don't await it inside the bucket call site, but here it's fine to
-    // chain since the bucket write already pushed cards to the renderer.
     const threads = await listPRReviewThreads(this.wingId);
     for (const [key, info] of Object.entries(threads)) {
       const existing = cacheStore.snapshot().prs[key];
@@ -54,85 +56,49 @@ export class PRBucketsRefresher extends TTLRefresher {
   }
 }
 
-/** Per-wing watched-PR list. Each entry fetched individually via fetchPR so
- *  state (including merged/closed) is always current. */
-export class WatchedPRsRefresher extends TTLRefresher {
+/** One batched graphql call covering explicit `(repo, number)` refs the user
+ *  pointed at — both the wing's watched list and every `workspace.prs` entry.
+ *  Replaces the prior N parallel `gh pr view` fan-out (one per ref, per
+ *  refresher, per tick), which was the dominant source of rate-limit pressure.
+ *
+ *  Tagging: only the user's explicit watch list gets the `watching` tag.
+ *  Workspace-attached PRs that aren't independently watched are hydrated in
+ *  the cache but carry no tag from this refresher (they may still be tagged
+ *  mine/review/reviewed by the bucket refresher if they match those searches).
+ *  Renderer reads workspace PRs by key via `usePRsForWorkspace`, not by tag. */
+export class ExplicitPRsRefresher extends TTLRefresher {
   constructor(private wingId: string) {
-    super(WATCHED_TTL_MS);
+    super(EXPLICIT_TTL_MS);
   }
 
   protected async tick(): Promise<void> {
     const watched = listWatchedPRs(this.wingId);
-    const results = await Promise.all(
-      watched.map(async (w) => {
-        const pr = await fetchPR(w.repo, w.number);
-        return pr ? { key: prKey(w.repo, w.number), pr } : null;
-      }),
-    );
-    const keys: string[] = [];
-    for (const r of results) {
-      if (!r) continue;
-      cacheStore.setPR(r.key, r.pr);
-      keys.push(r.key);
-    }
-    cacheStore.setPRBucket(this.wingId, "watching", keys);
-  }
-}
-
-/** Per-wing scan of every workspace.prs entry. Fetches PRs that aren't already
- *  in the cache from another bucket, and tags them "linked". The "linked" tag
- *  is what keeps these PRs alive across gcPRs even when they don't appear in
- *  any GitHub-side bucket (e.g. a closed PR no longer in `is:open` results). */
-export class WorkspaceLinkedPRsRefresher extends TTLRefresher {
-  constructor(private wingId: string) {
-    super(WORKSPACE_LINKED_TTL_MS);
-  }
-
-  protected async tick(): Promise<void> {
     const workspaces = listWorkspaces(this.wingId);
-    const refs = new Map<string, { repo: string; number: number }>();
+
+    const watchedKeys = new Set(watched.map((w) => prKey(w.repo, w.number)));
+    const refMap = new Map<string, { repo: string; number: number }>();
+    for (const w of watched) refMap.set(prKey(w.repo, w.number), w);
     for (const ws of workspaces) {
-      for (const p of ws.prs) {
-        refs.set(prKey(p.repo, p.number), p);
-      }
+      for (const p of ws.prs) refMap.set(prKey(p.repo, p.number), p);
+    }
+    const refs = [...refMap.values()];
+
+    const fetched = await fetchExplicitPRs(refs);
+    for (const [key, pr] of Object.entries(fetched)) {
+      cacheStore.setPR(key, pr);
     }
 
-    const snapshot = cacheStore.snapshot();
-    const linkedKeys: string[] = [];
-    const toFetch: { key: string; repo: string; number: number }[] = [];
-
-    for (const [key, ref] of refs) {
-      linkedKeys.push(key);
-      // Always re-fetch — bucket fetches use is:pr is:open, which never
-      // returns closed/merged PRs. Without an explicit per-key fetch we'd
-      // never see state transitions for linked PRs.
-      toFetch.push({ key, repo: ref.repo, number: ref.number });
-    }
-
-    cacheStore.setPRBucket(this.wingId, "linked", linkedKeys);
-
-    // Fetch in parallel; ignore any that vanished (deleted PRs).
-    const results = await Promise.all(
-      toFetch.map(async (f) => {
-        const pr = await fetchPR(f.repo, f.number);
-        return pr ? { key: f.key, pr } : null;
-      }),
-    );
-    for (const r of results) {
-      if (r) cacheStore.setPR(r.key, r.pr);
-    }
+    // Only the explicit watch list earns the `watching` tag. workspace.prs
+    // entries are hydrated above but tag-less here.
+    cacheStore.setPRBucket(this.wingId, "watching", [...watchedKeys]);
   }
 
-  /** Force-refresh a single linked key. Called after a write that changes
-   *  workspace.prs membership. */
+  /** Force-refresh a single ref. Called after a workspace.prs / watched
+   *  mutation so the new ref hydrates without waiting for the next tick. */
   async refreshKey(repo: string, number: number): Promise<void> {
+    const fetched = await fetchExplicitPRs([{ repo, number }]);
     const key = prKey(repo, number);
-    const pr = await fetchPR(repo, number);
+    const pr = fetched[key];
     if (pr) cacheStore.setPR(key, pr);
-    // Make sure it's tagged in this wing.
-    const tags = cacheStore.wingTagMap(this.wingId)[key] ?? [];
-    if (!tags.includes("linked")) {
-      cacheStore.setPRTags(this.wingId, key, [...tags, "linked"]);
-    }
   }
 }

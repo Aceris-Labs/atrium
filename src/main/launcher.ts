@@ -1,12 +1,53 @@
-import { spawn, spawnSync } from "child_process";
+import { spawn, spawnSync, execFile } from "child_process";
+import { promisify } from "util";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { shell } from "electron";
 import { getEffectiveLaunchProfile, getWing, updateWorkspace } from "./store";
-import { currentBranch, checkoutBranch } from "./git";
 import { buildWorkspaceContextMarkdown } from "./context";
 import type { LaunchAction, TmuxPane, Workspace } from "../shared/types";
+
+const execFileP = promisify(execFile);
+
+// Timeout for any single child process invoked during launch. If tmux or
+// another tool wedges, we want the launch to fail visibly rather than freeze
+// the main process.
+const CHILD_TIMEOUT_MS = 5_000;
+
+interface ChildResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+async function run(bin: string, args: string[]): Promise<ChildResult> {
+  try {
+    const { stdout, stderr } = await execFileP(bin, args, {
+      encoding: "utf-8",
+      timeout: CHILD_TIMEOUT_MS,
+    });
+    return { status: 0, stdout, stderr };
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException & {
+      code?: number | string;
+      stdout?: string;
+      stderr?: string;
+      killed?: boolean;
+      signal?: string;
+    };
+    if (err.killed && err.signal === "SIGTERM") {
+      throw new Error(
+        `${bin} ${args.join(" ")} timed out after ${CHILD_TIMEOUT_MS}ms`,
+      );
+    }
+    return {
+      status: typeof err.code === "number" ? err.code : 1,
+      stdout: err.stdout ?? "",
+      stderr: err.stderr ?? "",
+    };
+  }
+}
 
 function resolveDir(dir?: string): string | undefined {
   if (!dir) return undefined;
@@ -30,8 +71,8 @@ export const TMUX_BIN: string = (() => {
   return "tmux";
 })();
 
-function tmux(args: string[]): ReturnType<typeof spawnSync> {
-  return spawnSync(TMUX_BIN, args, { encoding: "utf-8" });
+function tmux(args: string[]): Promise<ChildResult> {
+  return run(TMUX_BIN, args);
 }
 
 const TERMINAL_BINS: Record<string, string> = {
@@ -46,27 +87,18 @@ const EDITOR_BINS: Record<string, string[]> = {
   code: ["code"],
 };
 
-export function launchWorkspace(wingId: string, workspace: Workspace): string {
+export async function launchWorkspace(
+  wingId: string,
+  workspace: Workspace,
+): Promise<string> {
   const launchProfile = getEffectiveLaunchProfile(wingId, workspace);
   const sessionName = workspace.tmuxSession ?? workspace.id;
   const wing = getWing(wingId);
 
   const dir = resolveDir(workspace.worktree?.path ?? wing?.projectDir);
 
-  // Spaces with a worktree are isolated: ensure the worktree is on the
-  // workspace's focus branch before any shells/editors open. Spaces without
-  // a worktree share the wing's project dir and we leave its branch alone.
-  if (dir && workspace.worktree && workspace.branch) {
-    const head = currentBranch(dir);
-    if (head && head !== workspace.branch) {
-      const err = checkoutBranch(dir, workspace.branch);
-      if (err) {
-        throw new Error(
-          `Could not check out '${workspace.branch}' in ${dir}: ${err}`,
-        );
-      }
-    }
-  }
+  // We deliberately do NOT touch the worktree's branch on launch — the
+  // workspace is dropped back into whatever state the user left it in.
 
   const existingIds = dir ? listJsonlSessionIds(dir) : new Set<string>();
 
@@ -76,7 +108,7 @@ export function launchWorkspace(wingId: string, workspace: Workspace): string {
         launchEditor(action, workspace, wingId, dir);
         break;
       case "terminal-tmux":
-        launchTerminalTmux(
+        await launchTerminalTmux(
           action.app,
           sessionName,
           workspace,
@@ -154,31 +186,31 @@ function buildPanes(
   }));
 }
 
-function launchTerminalTmux(
+async function launchTerminalTmux(
   app: string,
   sessionName: string,
   workspace: Workspace,
   dir: string | undefined,
   actionPanes: TmuxPane[] | undefined,
   wingId: string,
-): void {
+): Promise<void> {
   if (!dir) return;
 
   // If a session exists but its starting directory doesn't match the
   // workspace dir, it was created at the wrong cwd (e.g. `/`) and we can't
   // fix that on an existing session — kill it so we recreate cleanly.
-  const existingPath = getSessionPath(sessionName);
+  const existingPath = await getSessionPath(sessionName);
   if (existingPath !== null && existingPath !== stripTrailingSlash(dir)) {
-    tmux(["kill-session", "-t", sessionName]);
+    await tmux(["kill-session", "-t", sessionName]);
   }
 
-  if (!isTmuxSessionRunning(sessionName)) {
+  if (!(await isTmuxSessionRunning(sessionName))) {
     const s = sessionName;
     const panes = buildPanes(actionPanes, workspace, dir, wingId);
 
-    tmux(["new-session", "-d", "-s", s, "-c", dir]);
+    await tmux(["new-session", "-d", "-s", s, "-c", dir]);
     if (panes[0]?.command) {
-      tmux(["send-keys", "-t", s, panes[0].command, "Enter"]);
+      await tmux(["send-keys", "-t", s, panes[0].command, "Enter"]);
     }
 
     let focusIndex: number | undefined = panes[0]?.focus ? 0 : undefined;
@@ -193,15 +225,15 @@ function launchTerminalTmux(
       ];
       if (pane.size !== undefined) splitArgs.push("-p", String(pane.size));
       splitArgs.push("-c", dir);
-      tmux(splitArgs);
+      await tmux(splitArgs);
       if (pane.command) {
-        tmux(["send-keys", "-t", s, pane.command, "Enter"]);
+        await tmux(["send-keys", "-t", s, pane.command, "Enter"]);
       }
       if (pane.focus) focusIndex = i;
     }
 
     if (focusIndex !== undefined) {
-      tmux(["select-pane", "-t", `${s}:0.${focusIndex}`]);
+      await tmux(["select-pane", "-t", `${s}:0.${focusIndex}`]);
     }
   }
 
@@ -210,7 +242,7 @@ function launchTerminalTmux(
   // existing window — when spawning a new one, the new window will come to
   // front on its own. Calling activateApp before the window exists just
   // foregrounds whatever window was already open.
-  const switched = tmux(["switch-client", "-t", sessionName]);
+  const switched = await tmux(["switch-client", "-t", sessionName]);
   if (switched.status !== 0) {
     openTerminalWithTmux(app, sessionName, dir);
   } else {
@@ -222,8 +254,8 @@ function launchTerminalTmux(
 // is set by `-c` at new-session time and never changes). Null if the
 // session doesn't exist. Trailing slashes are stripped so callers can
 // compare against `dir` with stripTrailingSlash.
-function getSessionPath(sessionName: string): string | null {
-  const result = tmux([
+async function getSessionPath(sessionName: string): Promise<string | null> {
+  const result = await tmux([
     "display-message",
     "-p",
     "-t",
@@ -231,7 +263,7 @@ function getSessionPath(sessionName: string): string | null {
     "#{session_path}",
   ]);
   if (result.status !== 0) return null;
-  const path = (result.stdout ?? "").trim();
+  const path = result.stdout.trim();
   if (!path) return null;
   return stripTrailingSlash(path);
 }
@@ -407,12 +439,12 @@ function scheduleSessionIdCapture(
   }, INTERVAL_MS);
 }
 
-export function stopSession(sessionName: string): void {
-  if (isTmuxSessionRunning(sessionName)) {
-    tmux(["kill-session", "-t", sessionName]);
+export async function stopSession(sessionName: string): Promise<void> {
+  if (await isTmuxSessionRunning(sessionName)) {
+    await tmux(["kill-session", "-t", sessionName]);
   }
 }
 
-export function isTmuxSessionRunning(session: string): boolean {
-  return tmux(["has-session", "-t", session]).status === 0;
+export async function isTmuxSessionRunning(session: string): Promise<boolean> {
+  return (await tmux(["has-session", "-t", session])).status === 0;
 }

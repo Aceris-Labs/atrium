@@ -89,6 +89,15 @@ const api: WindowApi = {
       };
     },
   },
+  errors: {
+    onError: (handler: (message: string) => void) => {
+      const wrapped = (_: unknown, message: string) => handler(message);
+      ipcRenderer.on("app:error", wrapped);
+      return () => {
+        ipcRenderer.removeListener("app:error", wrapped);
+      };
+    },
+  },
   agents: {
     sessions: () => ipcRenderer.invoke("agents:sessions"),
   },
@@ -139,7 +148,8 @@ const api: WindowApi = {
     setActiveWing: (wingId: string | null) =>
       ipcRenderer.invoke("cache:setActiveWing", wingId),
     refreshAll: () => ipcRenderer.invoke("cache:refreshAll"),
-    refreshLinked: () => ipcRenderer.invoke("cache:refreshLinked"),
+    refreshPRs: () => ipcRenderer.invoke("cache:refreshPRs"),
+    refreshExplicit: () => ipcRenderer.invoke("cache:refreshExplicit"),
     requestPRRefresh: (repo: string, number: number) =>
       ipcRenderer.invoke("cache:requestPRRefresh", repo, number),
     requestLinkRefresh: (url: string) =>

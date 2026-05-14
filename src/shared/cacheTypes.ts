@@ -2,15 +2,7 @@ import type { PRStatus, LinkStatus, AwaitingReplyThread } from "./types";
 
 export type AgentStatus = "working" | "needs-input" | "idle" | "no-session";
 
-export type PRTag =
-  | "mine"
-  | "review"
-  | "reviewed"
-  | "watching"
-  /** Referenced by some workspace.prs entry in this wing. Distinct from the
-   *  bucket tags so selectors can find workspace-linked PRs even when the
-   *  viewer is neither author nor reviewer. */
-  | "linked";
+export type PRTag = "mine" | "review" | "reviewed" | "watching";
 
 /** Per-PR review-thread enrichment, merged into the PR object on the renderer
  *  when the heavier review-threads payload arrives after the card-level fetch. */

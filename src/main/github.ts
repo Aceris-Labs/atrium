@@ -14,6 +14,7 @@ const PR_FIELDS_LITE = `
     number
     title
     url
+    state
     isDraft
     reviewDecision
     mergeStateStatus
@@ -74,9 +75,10 @@ export async function listAllPRs(wingId: string): Promise<AllPRs> {
   const scope = await wingRepoScope(wingId);
   if (scope === null) return empty;
 
-  const authoredQ = `is:pr is:open author:@me${scope}`;
-  const reviewRequestedQ = `is:pr is:open review-requested:@me${scope}`;
-  const reviewedQ = `is:pr is:open reviewed-by:@me -author:@me${scope}`;
+  const since = isoDateNDaysAgo(90);
+  const authoredQ = `is:pr author:@me updated:>=${since} sort:updated-desc${scope}`;
+  const reviewRequestedQ = `is:pr review-requested:@me updated:>=${since} sort:updated-desc${scope}`;
+  const reviewedQ = `is:pr reviewed-by:@me -author:@me updated:>=${since} sort:updated-desc${scope}`;
 
   const query = `
     query {
@@ -130,6 +132,7 @@ export async function listPRReviewThreads(
   const authoredQ = `is:pr is:open author:@me${scope}`;
   const reviewRequestedQ = `is:pr is:open review-requested:@me${scope}`;
   const reviewedQ = `is:pr is:open reviewed-by:@me -author:@me${scope}`;
+  // listPRReviewThreads stays open-only — threads only matter for active PRs.
 
   const query = `
     query {
@@ -233,6 +236,11 @@ async function readRepoRemote(repoPath: string): Promise<string | null> {
   }
 }
 
+function isoDateNDaysAgo(n: number): string {
+  const d = new Date(Date.now() - n * 24 * 60 * 60_000);
+  return d.toISOString().slice(0, 10);
+}
+
 function parseGitRemote(url: string): string | null {
   const match = url.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
   return match ? match[1] : null;
@@ -243,6 +251,49 @@ export async function getDefaultRepo(wingId: string): Promise<string | null> {
   if (!rootDir) return null;
   const repos = await getReposInDirectory(rootDir);
   return repos.length > 0 ? repos[0].repo : null;
+}
+
+/** Batched lookup of explicit `(repo, number)` refs via a single graphql call.
+ *  Replaces N parallel `gh pr view` subprocess spawns with one graphql query
+ *  using aliased `repository().pullRequest()` selections. Returns a map keyed
+ *  by `${repo}-${number}` so callers can apply tags / merge with bucket data. */
+export async function fetchExplicitPRs(
+  refs: ReadonlyArray<{ repo: string; number: number }>,
+): Promise<Record<string, PRStatus>> {
+  if (refs.length === 0) return {};
+
+  const aliasFor = (i: number) => `p${i}`;
+  const aliasParts = refs.map((r, i) => {
+    const [owner, name] = r.repo.split("/", 2);
+    return `${aliasFor(i)}: repository(owner: "${owner}", name: "${name}") {
+      pullRequest(number: ${r.number}) { ${PR_FIELDS_LITE} }
+    }`;
+  });
+
+  const query = `query { ${aliasParts.join("\n")} }`;
+  const { ghPath } = getConfig();
+  try {
+    const { stdout } = await execFileAsync(ghPath, [
+      "api",
+      "graphql",
+      "-f",
+      `query=${query}`,
+    ]);
+    const data = JSON.parse(stdout);
+    if (data.errors) {
+      console.error("[github] fetchExplicitPRs errors:", data.errors);
+    }
+    const out: Record<string, PRStatus> = {};
+    refs.forEach((r, i) => {
+      const node = data.data?.[aliasFor(i)]?.pullRequest;
+      if (node?.number == null) return;
+      out[`${r.repo}-${r.number}`] = mapNodeLite(node);
+    });
+    return out;
+  } catch (err) {
+    console.error("[github] fetchExplicitPRs failed:", err);
+    return {};
+  }
 }
 
 export async function fetchPR(
@@ -298,7 +349,7 @@ function mapNodeLite(node: any): PRStatus {
   return {
     number: node.number,
     title: node.title,
-    state: "open",
+    state: (node.state ?? "OPEN").toLowerCase() as PRStatus["state"],
     url: node.url,
     isDraft: node.isDraft ?? false,
     ciStatus: mapCIState(ciState),

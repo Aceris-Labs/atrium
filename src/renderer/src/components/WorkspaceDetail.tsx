@@ -703,7 +703,7 @@ export function WorkspaceDetail({
                   style={{ minWidth: 200, left: 0, right: "auto" }}
                 >
                   {branchRepoInfo.isRepo && branchRepoInfo.branches ? (
-                    <>
+                    <div className="max-h-[280px] overflow-y-auto">
                       {branchRepoInfo.branches.map((b) => (
                         <button
                           key={b}
@@ -713,7 +713,7 @@ export function WorkspaceDetail({
                           {b}
                         </button>
                       ))}
-                    </>
+                    </div>
                   ) : (
                     <div className="px-2 py-2">
                       <input
@@ -880,9 +880,9 @@ export function WorkspaceDetail({
           </div>
 
           <button
-            className="btn btn-primary btn-sm flex items-center gap-1"
-            onClick={handleLaunch}
-            title={launchError ?? "Launch this space"}
+            className="inline-flex items-center gap-1.5 px-[14px] py-[6px] bg-blue text-white text-sm font-semibold rounded-sm hover:brightness-90 cursor-pointer"
+            onClick={() => handleLaunch()}
+            title="Launch this space"
           >
             <PlayIcon className="w-3.5 h-3.5" />
             Launch

@@ -63,18 +63,6 @@ export function currentBranch(dir: string): string | null {
   return head;
 }
 
-/** Attempts `git checkout <branch>` in `dir`. Returns null on success or the
- *  trimmed stderr on failure. Caller should surface the error message. */
-export function checkoutBranch(dir: string, branch: string): string | null {
-  const expanded = expandTilde(dir);
-  const result = spawnSync("git", ["checkout", branch], {
-    cwd: expanded,
-    encoding: "utf-8",
-  });
-  if (result.status === 0) return null;
-  return (result.stderr || result.stdout || "git checkout failed").trim();
-}
-
 export interface WorktreeInfo {
   path: string;
   branch?: string;

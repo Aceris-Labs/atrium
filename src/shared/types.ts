@@ -439,6 +439,11 @@ export type WindowApi = {
      *  edited workspace data). Returns an unsubscribe function. */
     onDataChanged: (handler: () => void) => () => void;
   };
+  errors: {
+    /** Fired for main-process errors (uncaughtException, unhandledRejection,
+     *  IPC handler throws) that aren't tied to an active invoke() call. */
+    onError: (handler: (message: string) => void) => () => void;
+  };
   watchedPRs: {
     list: (wingId: string) => Promise<{ number: number; repo: string }[]>;
     add: (
@@ -484,7 +489,8 @@ export type WindowApi = {
     snapshot: () => Promise<CacheState>;
     setActiveWing: (wingId: string | null) => Promise<void>;
     refreshAll: () => Promise<void>;
-    refreshLinked: () => Promise<void>;
+    refreshPRs: () => Promise<void>;
+    refreshExplicit: () => Promise<void>;
     requestPRRefresh: (repo: string, number: number) => Promise<void>;
     requestLinkRefresh: (url: string) => Promise<void>;
     onEvent: (handler: (event: CacheEvent) => void) => () => void;

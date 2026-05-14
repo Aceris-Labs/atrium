@@ -8,6 +8,25 @@ import type {
 } from "../../../shared/cacheTypes";
 import type { PRStatus, LinkStatus, Workspace } from "../../../shared/types";
 
+/** Semantic selectors over the PR universe. The cache holds PRs across all
+ *  states; views compose these slices instead of touching cache shape or
+ *  tag membership directly. New views = new selector, not a new refresher. */
+function filterByTag(
+  prs: Record<string, PRStatus>,
+  wingTags: Record<string, PRTag[]> | undefined,
+  tag: PRTag,
+): PRStatus[] {
+  if (!wingTags) return [];
+  const out: PRStatus[] = [];
+  for (const key of Object.keys(wingTags)) {
+    if (wingTags[key].includes(tag)) {
+      const pr = prs[key];
+      if (pr) out.push(pr);
+    }
+  }
+  return out;
+}
+
 export function usePR(
   repo: string | undefined,
   num: number,
@@ -19,24 +38,48 @@ export function usePRByKey(key: string): PRStatus | undefined {
   return useCacheStore((s) => s.prs[key]);
 }
 
-/** All PRs in a wing carrying the given tag. Stable identity per render via
- *  useMemo on the keyed slice. */
+/** All PRs in a wing carrying the given tag. Lower-level — prefer the
+ *  semantic hooks below (`useAuthoredOpen`, etc.) which compose this. */
 export function usePRsByTag(wingId: string | null, tag: PRTag): PRStatus[] {
   const prs = useCacheStore((s) => s.prs);
   const wingTags = useCacheStore((s) =>
     wingId ? s.prTags[wingId] : undefined,
   );
-  return useMemo(() => {
-    if (!wingId || !wingTags) return [];
-    const out: PRStatus[] = [];
-    for (const key of Object.keys(wingTags)) {
-      if (wingTags[key].includes(tag)) {
-        const pr = prs[key];
-        if (pr) out.push(pr);
-      }
-    }
-    return out;
-  }, [wingId, wingTags, prs, tag]);
+  return useMemo(
+    () => (wingId ? filterByTag(prs, wingTags, tag) : []),
+    [wingId, wingTags, prs, tag],
+  );
+}
+
+/** Open PRs authored by me in this wing. */
+export function useAuthoredOpen(wingId: string | null): PRStatus[] {
+  const all = usePRsByTag(wingId, "mine");
+  return useMemo(() => all.filter((pr) => pr.state === "open"), [all]);
+}
+
+/** Merged PRs authored by me in this wing — for "recently shipped" views. */
+export function useAuthoredMerged(wingId: string | null): PRStatus[] {
+  const all = usePRsByTag(wingId, "mine");
+  return useMemo(() => all.filter((pr) => pr.state === "merged"), [all]);
+}
+
+/** Open PRs requested-of-me or @mentioning me. */
+export function useReviewRequestedOpen(wingId: string | null): PRStatus[] {
+  const all = usePRsByTag(wingId, "review");
+  return useMemo(() => all.filter((pr) => pr.state === "open"), [all]);
+}
+
+/** Open PRs I've reviewed (but didn't author). Drives the inbox alongside
+ *  authored/review buckets so threads where I've already chimed in still
+ *  show awaiting-replies. */
+export function useReviewedOpen(wingId: string | null): PRStatus[] {
+  const all = usePRsByTag(wingId, "reviewed");
+  return useMemo(() => all.filter((pr) => pr.state === "open"), [all]);
+}
+
+/** PRs the user has explicitly watched in this wing (any state). */
+export function useWatched(wingId: string | null): PRStatus[] {
+  return usePRsByTag(wingId, "watching");
 }
 
 /** Tags attached to a PR in a given wing. */

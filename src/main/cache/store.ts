@@ -13,6 +13,10 @@ type Listener = (event: CacheEvent) => void;
 class CacheStore {
   private state: CacheState = structuredClone(EMPTY_CACHE_STATE);
   private listeners = new Set<Listener>();
+  /** Last time a wing was set active, by wingId. Drives the TTL sweep so
+   *  inactive wings' cached PR tags get reclaimed after WING_TTL_MS. Not part
+   *  of CacheState — purely main-side bookkeeping. */
+  private wingLastActive: Record<string, number> = {};
 
   snapshot(): CacheState {
     return this.state;
@@ -108,6 +112,28 @@ class CacheStore {
     for (const key of Object.keys(this.state.prs)) {
       if (!referenced.has(key)) this.deletePR(key);
     }
+  }
+
+  /** Mark a wing as active right now. Used by the orchestrator on wing
+   *  selection to drive the TTL sweep. */
+  noteWingActive(wingId: string): void {
+    this.wingLastActive[wingId] = Date.now();
+  }
+
+  /** Drop tag maps for wings inactive for longer than `ttlMs`, then GC any
+   *  PR records that no surviving wing tags. Cheap to call periodically — the
+   *  cache is small and tag-map walks are linear in (wings × tagged keys). */
+  sweepStaleWings(ttlMs: number): void {
+    const now = Date.now();
+    let cleared = false;
+    for (const [wingId, last] of Object.entries(this.wingLastActive)) {
+      if (now - last > ttlMs) {
+        this.clearWingTags(wingId);
+        delete this.wingLastActive[wingId];
+        cleared = true;
+      }
+    }
+    if (cleared) this.gcPRs();
   }
 
   // ── Link hydration ─────────────────────────────────────────────────────────

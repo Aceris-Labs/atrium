@@ -27,7 +27,7 @@ export function startWingsWatcher(getWindow: () => BrowserWindow | null): {
         win.webContents.send("data:changed");
       }
       void orchestrator.reconcileAgents();
-      void orchestrator.refreshLinked();
+      void orchestrator.refreshExplicit();
       void orchestrator.refreshLinks();
       timer = null;
     }, 250);
