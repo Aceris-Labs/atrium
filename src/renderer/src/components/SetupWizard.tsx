@@ -1,42 +1,14 @@
 import { useEffect, useState } from "react";
 import { PathInput } from "./PathInput";
-import type {
-  DetectedTools,
-  LaunchAction,
-  ToolStatus,
-} from "../../../shared/types";
+import { LauncherPicker } from "./LauncherPicker";
+import type { DetectedTools, ToolStatus } from "../../../shared/types";
 
 interface Props {
   onComplete: () => void;
 }
 
-type Step = "root" | "gh" | "workspace" | "done";
-const STEPS: Step[] = ["gh", "workspace", "root", "done"];
-
-type Preset =
-  | "editor-only"
-  | "terminal-tmux"
-  | "editor-and-terminal"
-  | "terminal-cmd";
-
-const PRESET_INFO: Record<Preset, { label: string; desc: string }> = {
-  "editor-only": {
-    label: "Editor only",
-    desc: "Open your editor at the directory",
-  },
-  "terminal-tmux": {
-    label: "Terminal + tmux",
-    desc: "tmux session with nvim, claude, and shell panes",
-  },
-  "editor-and-terminal": {
-    label: "Editor + Terminal",
-    desc: "Both your editor and a tmux terminal session",
-  },
-  "terminal-cmd": {
-    label: "Terminal + command",
-    desc: "Run a custom command in a terminal",
-  },
-};
+type Step = "gh" | "launcher" | "wing" | "done";
+const STEPS: Step[] = ["gh", "launcher", "wing", "done"];
 
 function StatusIcon({ status }: { status: ToolStatus }) {
   if (!status.installed)
@@ -52,32 +24,25 @@ export function SetupWizard({ onComplete }: Props) {
   const [detecting, setDetecting] = useState(false);
 
   const [wingName, setWingName] = useState("Main");
-  const [rootDir, setRootDir] = useState("");
+  const [projectDir, setProjectDir] = useState("");
   const [ghPath, setGhPath] = useState("");
-  const [preset, setPreset] = useState<Preset>("terminal-tmux");
-  const [editorApp, setEditorApp] = useState<"cursor" | "code">("cursor");
-  const [terminalApp, setTerminalApp] = useState<
-    "ghostty" | "iterm" | "terminal" | "warp"
-  >("ghostty");
-  const [customCmd, setCustomCmd] = useState("claude --resume");
+  const [launcherId, setLauncherId] = useState<string | null>(null);
 
-  async function runDetect() {
+  async function runDetect(force = false) {
     setDetecting(true);
-    const d = await window.api.setup.detect();
+    const d = await window.api.setup.detect(force);
     setTools(d);
     setDetecting(false);
-
     if (d.gh.path) setGhPath(d.gh.path);
-    if (d.editors.cursor.installed) setEditorApp("cursor");
-    else if (d.editors.code.installed) setEditorApp("code");
-    if (d.terminals.ghostty.installed) setTerminalApp("ghostty");
-    else if (d.terminals.iterm.installed) setTerminalApp("iterm");
-    else if (d.terminals.warp.installed) setTerminalApp("warp");
-    else setTerminalApp("terminal");
   }
 
   useEffect(() => {
     runDetect();
+    // Pre-fill with the current global default (set by migration) so the user
+    // sees a sensible starting point.
+    window.api.launchers.list().then((d) => {
+      if (d.globalDefault) setLauncherId(d.globalDefault);
+    });
   }, []);
 
   const stepIdx = STEPS.indexOf(step);
@@ -88,80 +53,21 @@ export function SetupWizard({ onComplete }: Props) {
     if (stepIdx > 0) setStep(STEPS[stepIdx - 1]);
   }
 
-  function buildProfile(): LaunchAction[] {
-    switch (preset) {
-      case "editor-only":
-        return [{ type: "editor", app: editorApp }];
-      case "terminal-tmux":
-        return [{ type: "terminal-tmux", app: terminalApp }];
-      case "editor-and-terminal":
-        return [
-          { type: "editor", app: editorApp },
-          { type: "terminal-tmux", app: terminalApp },
-        ];
-      case "terminal-cmd":
-        return [{ type: "terminal-cmd", app: terminalApp, command: customCmd }];
-    }
-  }
-
   async function finish() {
-    const profile = buildProfile();
+    if (launcherId) {
+      await window.api.launchers.setGlobalDefault(launcherId);
+    }
     await window.api.config.set({
       ghPath: ghPath || "/opt/homebrew/bin/gh",
-      defaultLaunchProfile: profile,
       setupComplete: true,
     });
     await window.api.wings.create({
       name: wingName.trim() || "Main",
-      rootDir: rootDir.trim() || undefined,
-      // launchProfile omitted → wing inherits the default we just saved
+      projectDir: projectDir.trim() || undefined,
+      // launchProfile omitted → wing inherits the global default we just set
     });
     onComplete();
   }
-
-  const editorOptions = tools
-    ? [
-        {
-          value: "cursor" as const,
-          label: "Cursor",
-          installed: tools.editors.cursor.installed,
-        },
-        {
-          value: "code" as const,
-          label: "VS Code",
-          installed: tools.editors.code.installed,
-        },
-      ]
-    : [];
-
-  const terminalOptions = tools
-    ? [
-        {
-          value: "ghostty" as const,
-          label: "Ghostty",
-          installed: tools.terminals.ghostty.installed,
-        },
-        {
-          value: "iterm" as const,
-          label: "iTerm",
-          installed: tools.terminals.iterm.installed,
-        },
-        {
-          value: "warp" as const,
-          label: "Warp",
-          installed: tools.terminals.warp.installed,
-        },
-        {
-          value: "terminal" as const,
-          label: "Terminal.app",
-          installed: tools.terminals.terminal.installed,
-        },
-      ]
-    : [];
-
-  const needsEditor =
-    preset === "editor-only" || preset === "editor-and-terminal";
-  const needsTerminal = preset !== "editor-only";
 
   return (
     <div className="setup-overlay">
@@ -179,40 +85,6 @@ export function SetupWizard({ onComplete }: Props) {
         </div>
 
         <div className="setup-body">
-          {/* ── First Wing ──────────────────────────────── */}
-          {step === "root" && (
-            <div className="setup-section">
-              <h2 className="setup-subtitle">Your first wing</h2>
-              <p className="setup-desc">
-                A wing is a project context — its own set of workspaces, PRs,
-                and root directory. You can add more wings anytime from the tab
-                strip.
-              </p>
-              <div className="form-group">
-                <label className="form-label">Name</label>
-                <input
-                  className="form-input"
-                  value={wingName}
-                  onChange={(e) => setWingName(e.target.value)}
-                  placeholder="Main"
-                  autoFocus
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Root directory</label>
-                <PathInput
-                  value={rootDir}
-                  onChange={setRootDir}
-                  placeholder="~/your-project-directory"
-                />
-                <p className="setup-desc" style={{ marginTop: 6 }}>
-                  Atrium scans this directory for git repos to scope this wing's
-                  PR dashboard. Tab to complete.
-                </p>
-              </div>
-            </div>
-          )}
-
           {/* ── GitHub CLI ──────────────────────────────── */}
           {step === "gh" && tools && (
             <div className="setup-section">
@@ -235,7 +107,7 @@ export function SetupWizard({ onComplete }: Props) {
                   <code className="setup-command">brew install gh</code>
                   <button
                     className="btn btn-ghost"
-                    onClick={runDetect}
+                    onClick={() => runDetect(true)}
                     disabled={detecting}
                   >
                     {detecting ? "Checking…" : "Re-check"}
@@ -248,7 +120,7 @@ export function SetupWizard({ onComplete }: Props) {
                   <code className="setup-command">gh auth login</code>
                   <button
                     className="btn btn-ghost"
-                    onClick={runDetect}
+                    onClick={() => runDetect(true)}
                     disabled={detecting}
                   >
                     {detecting ? "Checking…" : "Re-check"}
@@ -285,7 +157,7 @@ export function SetupWizard({ onComplete }: Props) {
                   </code>
                   <button
                     className="btn btn-ghost"
-                    onClick={runDetect}
+                    onClick={() => runDetect(true)}
                     disabled={detecting}
                   >
                     {detecting ? "Checking…" : "Re-check"}
@@ -295,98 +167,52 @@ export function SetupWizard({ onComplete }: Props) {
             </div>
           )}
 
-          {/* ── Workspace Launch ────────────────────────── */}
-          {step === "workspace" && tools && (
+          {/* ── Launcher ────────────────────────────────── */}
+          {step === "launcher" && (
             <div className="setup-section">
-              <h2 className="setup-subtitle">What should Launch do?</h2>
+              <h2 className="setup-subtitle">Default launcher</h2>
               <p className="setup-desc">
-                Choose what opens when you launch a workspace.
+                Choose what opens when you launch a workspace. You can customize
+                or create your own anytime in Settings → Launchers.
               </p>
+              <LauncherPicker
+                scope="global"
+                value={launcherId}
+                onChange={setLauncherId}
+              />
+            </div>
+          )}
 
-              <div className="setup-radio-group">
-                {(
-                  Object.entries(PRESET_INFO) as [
-                    Preset,
-                    (typeof PRESET_INFO)[Preset],
-                  ][]
-                ).map(([key, info]) => (
-                  <label
-                    key={key}
-                    className={`setup-radio${preset === key ? " selected" : ""}`}
-                  >
-                    <input
-                      type="radio"
-                      name="preset"
-                      checked={preset === key}
-                      onChange={() => setPreset(key)}
-                    />
-                    <div>
-                      <span className="setup-radio-label">{info.label}</span>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: "var(--text-muted)",
-                          marginTop: 2,
-                        }}
-                      >
-                        {info.desc}
-                      </div>
-                    </div>
-                  </label>
-                ))}
+          {/* ── First wing ──────────────────────────────── */}
+          {step === "wing" && (
+            <div className="setup-section">
+              <h2 className="setup-subtitle">Your first wing</h2>
+              <p className="setup-desc">
+                A wing is a project context — its own set of workspaces, PRs,
+                and project directory. You can add more wings anytime from the
+                tab strip.
+              </p>
+              <div className="form-group">
+                <label className="form-label">Name</label>
+                <input
+                  className="form-input"
+                  value={wingName}
+                  onChange={(e) => setWingName(e.target.value)}
+                  placeholder="Main"
+                  autoFocus
+                />
               </div>
-
-              {/* App selectors based on preset */}
-              <div className="setup-app-selectors">
-                {needsEditor && (
-                  <div className="form-group">
-                    <label className="form-label">Editor</label>
-                    <div className="setup-inline-options">
-                      {editorOptions.map((opt) => (
-                        <button
-                          key={opt.value}
-                          className={`setup-chip${editorApp === opt.value ? " active" : ""}${!opt.installed ? " disabled" : ""}`}
-                          onClick={() => setEditorApp(opt.value)}
-                        >
-                          {opt.label}
-                          {!opt.installed && (
-                            <span className="setup-chip-note">not found</span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {needsTerminal && (
-                  <div className="form-group">
-                    <label className="form-label">Terminal</label>
-                    <div className="setup-inline-options">
-                      {terminalOptions.map((opt) => (
-                        <button
-                          key={opt.value}
-                          className={`setup-chip${terminalApp === opt.value ? " active" : ""}${!opt.installed ? " disabled" : ""}`}
-                          onClick={() => setTerminalApp(opt.value)}
-                        >
-                          {opt.label}
-                          {!opt.installed && (
-                            <span className="setup-chip-note">not found</span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {preset === "terminal-cmd" && (
-                  <div className="form-group">
-                    <label className="form-label">Command</label>
-                    <input
-                      className="form-input"
-                      value={customCmd}
-                      onChange={(e) => setCustomCmd(e.target.value)}
-                      placeholder="claude --resume"
-                    />
-                  </div>
-                )}
+              <div className="form-group">
+                <label className="form-label">Project directory</label>
+                <PathInput
+                  value={projectDir}
+                  onChange={setProjectDir}
+                  placeholder="~/your-project-directory"
+                />
+                <p className="setup-desc" style={{ marginTop: 6 }}>
+                  Atrium scans this directory for git repos to scope this wing's
+                  PR dashboard. Tab to complete.
+                </p>
               </div>
             </div>
           )}
@@ -401,27 +227,13 @@ export function SetupWizard({ onComplete }: Props) {
                   <span>{wingName.trim() || "Main"}</span>
                 </div>
                 <div className="setup-summary-row">
-                  <span className="setup-summary-label">Root directory</span>
-                  <code>{rootDir || "(not set)"}</code>
+                  <span className="setup-summary-label">Project directory</span>
+                  <code>{projectDir || "(not set)"}</code>
                 </div>
                 <div className="setup-summary-row">
-                  <span className="setup-summary-label">
-                    Default launch profile
-                  </span>
-                  <span>{PRESET_INFO[preset].label}</span>
+                  <span className="setup-summary-label">Default launcher</span>
+                  <span>{launcherId ?? "(none)"}</span>
                 </div>
-                {needsEditor && (
-                  <div className="setup-summary-row">
-                    <span className="setup-summary-label">Editor</span>
-                    <span>{editorApp}</span>
-                  </div>
-                )}
-                {needsTerminal && (
-                  <div className="setup-summary-row">
-                    <span className="setup-summary-label">Terminal</span>
-                    <span>{terminalApp}</span>
-                  </div>
-                )}
               </div>
               <p className="setup-desc" style={{ marginTop: 16 }}>
                 You can change these anytime in Settings.
@@ -441,7 +253,7 @@ export function SetupWizard({ onComplete }: Props) {
             <button
               className="btn btn-primary"
               onClick={next}
-              disabled={step === "root" && !wingName.trim()}
+              disabled={step === "wing" && !wingName.trim()}
             >
               Next
             </button>

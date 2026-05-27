@@ -4,6 +4,7 @@ import { registerIpcHandlers } from "./ipc";
 import { closeAllMcpClients } from "./mcp/client";
 import { startWingsWatcher } from "./wingsWatcher";
 import { cacheStore, orchestrator } from "./cache";
+import { migrateLaunchers } from "./launchers";
 
 let mainWindow: BrowserWindow | null = null;
 let wingsWatcher: { stop: () => void } | null = null;
@@ -53,7 +54,10 @@ process.on("unhandledRejection", (reason) => {
   broadcastError(msg);
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await migrateLaunchers().catch((e) => {
+    console.error("[launchers] Migration failed:", e);
+  });
   registerIpcHandlers();
   createWindow();
   wingsWatcher = startWingsWatcher(() => mainWindow);

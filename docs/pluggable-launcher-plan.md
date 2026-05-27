@@ -2,115 +2,185 @@
 
 ## Framing
 
-Atrium is a workspace organizer. The launcher is a pluggable utility, not a tmux UI. The current three-pane tmux setup (nvim + claude + shell) is one user's preference, not the product. This plan makes the launcher fully configurable: multiple saved `LaunchProfile` records of various kinds, with overrides at global / wing / workspace scopes, managed through a Settings UI that mirrors the Connectors pattern.
+Atrium is a workspace organizer. The launcher is a pluggable utility, not a tmux UI. The current three-pane tmux setup is one user's preference, not the product. This plan makes the launcher fully configurable: named, reusable `LaunchProfile` records composed of an ordered list of actions, with overrides at global / wing / workspace scopes, managed through a Settings UI that mirrors the Connectors pattern and a single reusable picker used everywhere a launcher is selected.
 
-Design decisions confirmed:
+### Design decisions
 
-1. Presets are user-editable from the UI.
-2. Workspace context is exposed to launchers as `ATRIUM_*` env vars (stable contract).
-3. Override hierarchy: global default → wing → workspace, all three levels.
-4. Wizard becomes a soft picker (detect, present, sane default, skippable), no hard gates.
-5. Tmux pane editor is a row-per-pane UI, not a JSON textarea.
-6. Existing `defaultLaunchProfile` config and per-project `.atrium.json` get a migration path.
+1. A profile is a named, ordered list of actions. No "kind" enum at the profile level — composability is the model.
+2. System profiles are **read-only**. Duplicate to customize. Their `isSystem` flag means "no edit, no delete."
+3. Override hierarchy: global default → wing → workspace. Always inline on the wing/workspace record as a profile id.
+4. Workspace context exposed to launchers as `ATRIUM_*` env vars (stable contract).
+5. Launch never mutates the workspace — no branch checkout, no fetch, just `cd` into the effective dir.
+6. Per-action failure aborts the rest of the profile and surfaces a toast.
+7. One reusable `<LauncherPicker>` component is used in wizard, Settings global-default, wing settings, and workspace settings.
+8. Existing `defaultLaunchProfile` config, inline wing/workspace `launchProfile` arrays, and per-project `.atrium.json` files are migrated in a single ruthless pass with a backup.
 
-## Phase 1 — Types & data model (`src/shared/types.ts`)
+## Phase 1 — Types (`src/shared/types.ts`)
 
 ```ts
-type LaunchProfileKind = "editor" | "terminal" | "editor+terminal" | "tmux" | "command";
-
 type LaunchProfile = {
-  id: string;          // uuid
-  name: string;        // user-editable display name
-  kind: LaunchProfileKind;
-  config: EditorConfig | TerminalConfig | EditorTerminalConfig | TmuxConfig | CommandConfig;
+  id: string;
+  name: string;
+  description?: string;   // shown as subtext in pickers; populated for system profiles
+  isSystem?: boolean;     // read-only and undeletable; duplicate to customize
+  actions: LaunchAction[];
 };
 
-type LaunchScope =
-  | { level: "global" }
-  | { level: "wing"; wingId: string }
-  | { level: "workspace"; workspaceId: string };
+type LaunchAction =
+  | { type: "editor";   app: string; withClaude?: boolean }
+  | { type: "terminal"; app: string; command?: string }
+  | { type: "tmux";     app: string; panes: TmuxPane[] }
+  | { type: "command";  shell: "zsh" | "bash" | "sh" | "fish"; command: string };
 ```
 
-Per-kind configs:
+`Wing.launchProfile` and `Workspace.launchProfile` change from `LaunchAction[]` → `string | undefined` (profile id; absent = inherit). `AtriumConfig.defaultLaunchProfile` → `AtriumConfig.defaultLauncherId: string`.
 
-- `EditorConfig { app }`
-- `TerminalConfig { app }`
-- `EditorTerminalConfig { editor, terminal }`
-- `TmuxConfig { terminalApp, panes: TmuxPane[] }` (reuse existing `TmuxPane`)
-- `CommandConfig { shell, command }`
+## Phase 2 — Main process: `src/main/launchers/`
 
-## Phase 2 — Main process modules (new `src/main/launchers/`)
+### `store.ts`
 
-- **`registry.ts`** — Seeded built-in profiles created on first run: one editor profile per detected editor, one terminal profile per detected terminal, a starter tmux profile matching today's `DEFAULT_PANES`, and an empty command profile template.
-- **`store.ts`** — Persist `{ profiles, defaults: { global, wings: {wingId: id|null}, workspaces: {wsId: id|null} } }` under a new `launchers` key in `~/.atrium/config.json`. API: `listProfiles`, `upsertProfile`, `removeProfile`, `setDefault(scope, id|null)`, `resolve(workspaceCtx) → LaunchProfile`.
-- **`migrate.ts`** — Runs once on store init: convert existing `defaultLaunchProfile` into a seeded profile and set `defaults.global`. Walk known wing dirs for `.atrium.json`; for each, materialize a wing-scoped tmux profile from the file's pane overrides. Write a `launchersSchemaVersion: 1` marker. `.atrium.json` keeps working as a read-fallback for one release, then is removed.
-- **`exec.ts`** — Refactor of current `src/main/launcher.ts`. One executor per `LaunchProfileKind`. All executors receive an `AtriumEnv` block and inject it as env vars on every spawned process, and for tmux into pane shells via `set-environment`:
-  - `ATRIUM_WORKSPACE_DIR`, `ATRIUM_WORKSPACE_ID`, `ATRIUM_WORKSPACE_NAME`
-  - `ATRIUM_WING_ID`, `ATRIUM_WING_NAME`
-  - `ATRIUM_BRANCH` (when worktree-isolated)
-  - `ATRIUM_CONTEXT_FILE` (path to the temp markdown context file)
-- **`detect.ts`** — `detectLaunchTools()` returns `{ editors, terminals, tmux, shells }` with `{installed, version?}` per entry. Used by both wizard and Settings to badge availability.
+Persists `{ profiles, defaults: { global: string } }` under a new `launchers` key in `~/.atrium/config.json`. Wing/workspace overrides remain inline on those records.
 
-Keep `src/main/launcher.ts` as a thin shim during refactor, then delete.
+API:
+
+- `listProfiles()`, `getProfile(id)`, `upsertProfile(p)` (rejects edits to `isSystem` profiles),
+- `removeProfile(id)` (rejects `isSystem` and the current `defaults.global`),
+- `setGlobalDefault(id)`,
+- `resolveForWorkspace(wingId, workspaceId) → LaunchProfile` — walks workspace → wing → global.
+
+### `detect.ts`
+
+`detectLaunchTools() → { editors, terminals, tmux, shells }` with `{ installed, version? }` per entry. Used by registry, wizard, and availability badges.
+
+### `registry.ts`
+
+`seedSystemProfiles(detected)`: idempotent, keyed by stable ids like `system:editor:cursor`, `system:terminal:ghostty`, `system:tmux:default`. Emits:
+
+- One system editor profile per detected editor (`isSystem: true`, description like "Opens Cursor at the workspace directory").
+- One system terminal profile per detected terminal.
+- A "Three-pane tmux" system profile (panes = today's `DEFAULT_PANES`) if tmux is installed.
+
+System profiles regenerate on launch based on detection (so newly-installed tools appear automatically), but never overwrite user profiles.
+
+### `migrate.ts`
+
+Runs once on store init, gated by `launchersSchemaVersion: 1`:
+
+1. **Backup**: copy `~/.atrium/config.json` and any encountered `.atrium.json` into `~/.atrium/backups/pre-launcher-migration-<timestamp>/`.
+2. Run detection + `seedSystemProfiles`.
+3. Convert `config.defaultLaunchProfile` (old `LaunchAction[]`) → one user profile. If it matches a seeded system profile structurally, point `defaults.global` at the system one; otherwise create a user profile and use that.
+4. For each wing with old-shape `wing.launchProfile`: materialize a wing-scoped user profile (named `<WingName> launcher`), rewrite `wing.launchProfile` to its id.
+5. For each `.atrium.json` under known wing dirs: materialize a wing-scoped tmux user profile from its panes, set as the wing's launchProfile, then **delete the `.atrium.json` file**.
+6. For each workspace with an old-shape inline `launchProfile`: same treatment, workspace-scoped.
+7. Write `launchersSchemaVersion: 1`.
+
+### `exec.ts`
+
+Replaces `src/main/launcher.ts`. `executeProfile(profile, ctx)` iterates `actions[]` and dispatches per `action.type`. Actions run in order; **the first failure aborts the rest** and surfaces a toast naming which action failed and why.
+
+Per-action executors lift from today's `launcher.ts`:
+
+- `editor` ← `launchEditor`
+- `terminal` ← `launchTerminalCmd` (with optional initial command)
+- `tmux` ← `launchTerminalTmux`
+- `command` ← new (spawn with chosen shell, no terminal window)
+
+All spawns inject `ATRIUM_*` env vars. Tmux additionally uses `set-environment -t <session>` so panes inherit them.
+
+Env contract:
+
+- `ATRIUM_WORKSPACE_DIR`, `ATRIUM_WORKSPACE_ID`, `ATRIUM_WORKSPACE_NAME`
+- `ATRIUM_WING_ID`, `ATRIUM_WING_NAME`
+- `ATRIUM_BRANCH` (when worktree-isolated)
+- `ATRIUM_CONTEXT_FILE` (path to the temp markdown context file)
+
+The `${claude}` token in tmux panes keeps working (existing `buildClaudeCommand` logic ports over). Session-id capture (`scheduleSessionIdCapture`) ports as-is.
+
+Delete `src/main/launcher.ts` once exec is wired up — no shim.
 
 ## Phase 3 — IPC + preload
 
-Add handlers in `src/main/ipc.ts`, mirroring the connectors surface:
+In `src/main/ipc.ts`, add (and mirror in `window.api.launchers.*`):
 
-- `launchers:list` → `{ profiles, defaults }`
+- `launchers:list` → `{ profiles, globalDefault }`
 - `launchers:upsert(profile)`
 - `launchers:remove(id)`
-- `launchers:setDefault(scope, id|null)`
-- `launchers:resolve(workspaceId)` → resolved profile
+- `launchers:setGlobalDefault(id)`
+- `launchers:resolve(wingId, workspaceId)` → `LaunchProfile`
 - `launchers:detect` → `detectLaunchTools()`
-- `launchers:launch(workspaceId)` → resolves + execs (replaces today's launch IPC)
 
-Expose under `window.api.launchers.*` in `src/preload/index.ts` with typed signatures.
+The existing launch IPC keeps its shape; its implementation calls `executeProfile(resolveForWorkspace(...))`.
 
-## Phase 4 — Settings UI: LaunchersPanel
+## Phase 4 — Reusable `<LauncherPicker>` component
 
-New `src/renderer/src/components/LaunchersPanel.tsx`, modeled on `ConnectorsPanel.tsx`:
+One component used by wizard, Settings global-default, wing settings, and workspace settings:
 
-- Header with "Add launcher" button (dropdown of kinds → seeds a new profile).
-- One row per profile: name, kind badge, availability badge (e.g. red "tmux not installed"), expand chevron.
-- Expanded body holds a kind-specific editor component:
-  - `EditorProfileEditor` — dropdown of detected editors + name field
-  - `TerminalProfileEditor` — dropdown of detected terminals + name field
-  - `EditorTerminalProfileEditor` — both
-  - `TmuxProfileEditor` — terminal dropdown + row-per-pane editor: command field, split direction (h/v/none), size %, focus toggle, drag-reorder (or up/down buttons), add/remove pane buttons. Collapsible live preview of generated `tmux` commands.
-  - `CommandProfileEditor` — shell dropdown (zsh/bash/sh/fish), command textarea, collapsible info block listing the `ATRIUM_*` env vars
-- Save / Cancel / Delete inline, like `ConnectorRow`.
+```tsx
+<LauncherPicker
+  scope="global" | "wing" | "workspace"
+  value={profileId | null}     // null → inherit
+  inheritedLabel?: string      // e.g. "global: Three-pane tmux"
+  onChange={(profileId) => …}
+/>
+```
 
-Wire into `SettingsModal.tsx` as a new "Launchers" tab.
+Per-instance behavior:
 
-## Phase 5 — Scope override UI
+- **`scope="global"`** — no "Inherit" row (it's the root).
+- **`scope="wing"`** — "Inherit (global: <name>)" is the first option.
+- **`scope="workspace"`** — "Inherit from wing (<name>)" is the first option.
 
-Locate wing-settings UI and add a "Launcher" dropdown: `[Inherit (global default: <name>)] | <each profile>`. Locate workspace-settings UI and add the same: `[Inherit from wing] | <each profile>`. Both call `launchers:setDefault(scope, id|null)`.
+Built-in affordances:
 
-## Phase 6 — Wizard
+- Each profile row in the dropdown shows: name, one-line description (subtext), availability badge (red dot + tooltip if a required tool is missing).
+- **"+ New launcher…"** at the bottom — opens the inline profile editor in a popover; on save, assigns the new profile to the current scope.
+- **"Duplicate"** button next to each user-selectable row — clones the profile, switches selection to the copy, opens the editor.
 
-In `SetupWizard.tsx`, replace the current launch-profile step:
+## Phase 5 — Settings UI: `LaunchersPanel.tsx`
 
-1. Call `launchers:detect`.
-2. Show a list of suggested starter profiles built from detected tools — e.g., "Open in Cursor", "Open in VS Code", "Open in Terminal.app", "Three-pane tmux (nvim + claude + shell)" (last shown disabled with "Install tmux to enable" if not detected).
-3. Pick one or skip. On finish, the seeded profile is saved and set as `defaults.global`.
-4. Sane fallback if user skips: first detected editor → terminal → an empty command profile.
-5. Tools step: keep `gh`/`claude` checks but as informational badges, never blocking.
+New component, modeled on `ConnectorsPanel.tsx`. Wired in as a "Launchers" tab in `SettingsModal.tsx`.
 
-## Phase 7 — Cleanup
+- Header: `<LauncherPicker scope="global">` for the global default.
+- One row per profile. Row shows: name, description, system badge if applicable, action-count summary ("editor + tmux"), expand chevron. Delete hidden when `isSystem` or when id matches global default. Duplicate visible everywhere.
+- Expanded row — single editor used for all kinds:
+  - Name field (read-only for system profiles).
+  - Ordered action list. Each row: type chip, one-line summary, up/down, delete, expand.
+  - Per-action expanded editors:
+    - `editor` — app dropdown (detected editors badged), `withClaude` toggle when app supports it.
+    - `terminal` — app dropdown (detected terminals badged), optional command field.
+    - `tmux` — terminal app dropdown, row-per-pane table with up/down (no DnD). Each pane row: command, split (h/v; first row hides this), size %, focus radio (mutually exclusive). "Add pane" appends. Collapsible live preview of generated `tmux` commands.
+    - `command` — shell dropdown, command textarea, collapsible help block listing the `ATRIUM_*` env vars.
+  - "Add action" dropdown at bottom (one item per action type).
+  - For `isSystem` profiles, all fields render read-only with a single "Duplicate to customize" button at the bottom.
 
-- Remove `defaultLaunchProfile` shape from `config.json` writers (migration handles old reads).
-- Remove `.atrium.json` reading once migration has run on launch (keep one release of compatibility, log a deprecation).
-- Update README with the launcher model and `ATRIUM_*` env var contract.
+## Phase 6 — Wing / Workspace override UI
 
-## Sequencing — three PRs
+- **Wing settings** — locate during implementation (likely in `SpacesSidebar.tsx` or a wing-edit modal). Add `<LauncherPicker scope="wing">`. Writes to `wing.launchProfile` via existing wing update IPC.
+- **Workspace settings** — in `WorkspaceDetail.tsx`. Add `<LauncherPicker scope="workspace">`. Writes to `workspace.launchProfile`.
 
-- **PR1** — Phases 1–3 (types, store, migration, IPC, exec refactor). No UI yet; existing wizard keeps working via the migrated default. Verifiable by launching workspaces unchanged.
-- **PR2** — Phases 4–5 (Settings tab + scope overrides). Users can now manage profiles.
-- **PR3** — Phases 6–7 (wizard rewrite + cleanup).
+## Phase 7 — Wizard (`SetupWizard.tsx`)
 
-## Open items to confirm during implementation
+Becomes nearly trivial. The launch-profile step is one `<LauncherPicker scope="global">` — same picker as everywhere else, with the same duplicate / new-launcher affordances. `gh` / `claude` checks stay as informational badges, never blocking.
 
-- Exact location of wing/workspace settings UIs (Phase 5).
-- Whether `defaults.workspaces` lives in `config.json` or in each wing's `workspaces.json` — leaning per-wing to keep workspace data co-located; confirm against existing shape first.
-- Tmux pane drag-reorder library vs. plain up/down buttons — depends on whether the project already uses a DnD library.
+`src/renderer/src/components/LaunchProfileEditor.tsx` gets deleted — its job is absorbed into the per-action editors inside `LauncherPicker`'s inline editor popover.
+
+## Phase 8 — Cleanup
+
+- Delete `src/main/launcher.ts`, `src/renderer/src/components/LaunchProfileEditor.tsx`.
+- Remove old `LaunchAction` union shape (replaced), `AtriumConfig.defaultLaunchProfile`, old inline-array `Wing.launchProfile` / `Workspace.launchProfile` shapes from `types.ts`.
+- README: launcher model + `ATRIUM_*` env var contract.
+
+## Risk profile
+
+Single PR, destructive migration, touching the launch flow end-to-end. Mitigations:
+
+- Migration runs a backup as its first step.
+- Migration is idempotent and gated by `launchersSchemaVersion`.
+- Detection failures (missing apps) never crash; exec aborts the action chain and surfaces a clear toast.
+- Manual test plan: fresh install (no config), upgrade from current state, launch flow per action type, wing override, workspace override, duplicate-and-customize from picker, "+ New launcher…" from picker.
+
+## Open items resolved during implementation
+
+- Exact location of wing-settings UI for `<LauncherPicker scope="wing">`.
+- Whether system tmux profile's pane 2 keeps `focus: true` (yes — port `DEFAULT_PANES` verbatim).
+- Whether `${claude}` token is exposed in `command`-action `command` fields — **no**, it's a tmux-pane affordance; command-action authors use `ATRIUM_CONTEXT_FILE`.

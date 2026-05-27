@@ -26,8 +26,8 @@ export interface Workspace {
   prs: WorkspacePR[]; // PRs tracked by this workspace (repo-qualified)
   tmuxSession?: string; // linked tmux session name (for agent status tracking)
   claudeSessionId?: string; // Claude Code session UUID (captured after first launch; used for --resume)
-  /** Per-space launch profile override. If unset, falls back to wing.launchProfile, then config.defaultLaunchProfile. */
-  launchProfile?: LaunchAction[];
+  /** Per-space launch profile override. If unset, falls back to wing.launchProfile, then config.defaultLauncherId. Stores a LaunchProfile id. */
+  launchProfile?: string;
   items: Item[];
   links: WorkspaceLink[];
   about?: string; // user-written description
@@ -294,25 +294,30 @@ export interface TmuxPane {
   focus?: boolean; // move focus here after layout is built
 }
 
+export type LaunchShell = "zsh" | "bash" | "sh" | "fish";
+
 export type LaunchAction =
-  | { type: "editor"; app: "cursor" | "code"; withClaude?: boolean }
-  | {
-      type: "terminal-tmux";
-      app: "ghostty" | "iterm" | "terminal" | "warp";
-      panes?: TmuxPane[];
-    }
-  | {
-      type: "terminal-cmd";
-      app: "ghostty" | "iterm" | "terminal" | "warp";
-      command: string;
-    };
+  | { type: "editor"; app: string; withClaude?: boolean }
+  | { type: "terminal"; app: string; command?: string }
+  | { type: "tmux"; app: string; panes: TmuxPane[] }
+  | { type: "command"; shell: LaunchShell; command: string };
+
+export interface LaunchProfile {
+  id: string;
+  name: string;
+  /** One-line description shown as subtext in pickers. Populated for system profiles. */
+  description?: string;
+  /** Read-only, undeletable. Users duplicate to customize. */
+  isSystem?: boolean;
+  actions: LaunchAction[];
+}
 
 export interface Wing {
   id: string;
   name: string;
   projectDir?: string;
-  // undefined → inherit the global defaultLaunchProfile
-  launchProfile?: LaunchAction[];
+  // undefined → inherit the global default. Stores a LaunchProfile id.
+  launchProfile?: string;
   /** User-created groups (in addition to auto status groups) */
   customGroups?: { id: string; name: string }[];
   /** Ordered list of group IDs — only the implicit "active" default group + custom group IDs */
@@ -332,9 +337,10 @@ export interface AgentSessionInfo {
 export interface AtriumConfig {
   ghPath: string;
   setupComplete: boolean;
-  defaultLaunchProfile: LaunchAction[];
   wingOrder: string[];
   activeWingId: string | null;
+  /** Bumped by launcher migration; absent → migration hasn't run yet. */
+  launchersSchemaVersion?: number;
 }
 
 export interface ToolStatus {
@@ -381,7 +387,7 @@ export type WindowApi = {
     create: (data: {
       name: string;
       projectDir?: string;
-      launchProfile?: LaunchAction[];
+      launchProfile?: string;
     }) => Promise<Wing>;
     update: (wing: Wing) => Promise<Wing>;
     reorder: (orderedIds: string[]) => Promise<void>;
@@ -460,7 +466,18 @@ export type WindowApi = {
     set: (config: Partial<AtriumConfig>) => Promise<AtriumConfig>;
   };
   setup: {
-    detect: () => Promise<DetectedTools>;
+    /** Cached in main; pass `force=true` to re-detect. */
+    detect: (force?: boolean) => Promise<DetectedTools>;
+  };
+  launchers: {
+    list: () => Promise<{
+      profiles: LaunchProfile[];
+      globalDefault: string | null;
+    }>;
+    upsert: (profile: LaunchProfile) => Promise<LaunchProfile>;
+    remove: (id: string) => Promise<void>;
+    setGlobalDefault: (id: string) => Promise<void>;
+    resolve: (wingId: string, workspaceId: string) => Promise<LaunchProfile>;
   };
   git: {
     detectRepo: (dirPath: string) => Promise<GitRepoInfo>;

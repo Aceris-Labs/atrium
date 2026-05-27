@@ -12,13 +12,7 @@ import { PRCard, PRCardSkeleton } from "./PRCard";
 import { LinkCard } from "./LinkCard";
 import { ItemsTab } from "./ItemsTab";
 import { CreateWorktreeModal } from "./CreateWorktreeModal";
-import { Checkbox } from "./Checkbox";
-import {
-  LaunchProfileEditor,
-  initialProfileState,
-  buildProfile,
-  type ProfileEditorState,
-} from "./LaunchProfileEditor";
+import { LauncherPicker } from "./LauncherPicker";
 import {
   usePRsForWorkspace,
   usePRTags,
@@ -37,7 +31,7 @@ import type {
   LinkCategory,
   LinkStatus,
   GitRepoInfo,
-  DetectedTools,
+  LaunchProfile,
 } from "../../../shared/types";
 
 type Tab = "overview" | "items" | "links" | "settings";
@@ -222,13 +216,10 @@ export function WorkspaceDetail({
     key: string;
     before: boolean;
   } | null>(null);
-  const [overrideLaunch, setOverrideLaunch] = useState(
-    workspace.launchProfile !== undefined,
-  );
-  const [profileState, setProfileState] = useState<ProfileEditorState | null>(
-    null,
-  );
-  const [tools, setTools] = useState<DetectedTools | null>(null);
+  const [launcherProfiles, setLauncherProfiles] = useState<LaunchProfile[]>([]);
+  const [launcherGlobalDefault, setLauncherGlobalDefault] = useState<
+    string | null
+  >(null);
 
   const titleInputRef = useRef<HTMLInputElement>(null);
 
@@ -267,18 +258,10 @@ export function WorkspaceDetail({
   }, [workspace.id]);
 
   useEffect(() => {
-    setOverrideLaunch(workspace.launchProfile !== undefined);
-    (async () => {
-      const config = await window.api.config.get();
-      const fromWing = wing?.launchProfile;
-      setProfileState(
-        initialProfileState(
-          workspace.launchProfile ?? fromWing ?? config.defaultLaunchProfile,
-        ),
-      );
-    })();
-    window.api.setup.detect().then(setTools);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    window.api.launchers.list().then((d) => {
+      setLauncherProfiles(d.profiles);
+      setLauncherGlobalDefault(d.globalDefault);
+    });
   }, [workspace.id]);
 
   const wing = allWings.find((w) => w.id === wingId);
@@ -1351,46 +1334,26 @@ export function WorkspaceDetail({
                 </div>
               )}
 
-              {/* Launch overrides */}
+              {/* Launcher override */}
               <div className="border border-line rounded-md p-4 flex flex-col gap-3">
-                <label className="wt-checkbox-label">
-                  <Checkbox
-                    checked={overrideLaunch}
-                    onChange={() => {
-                      const next = !overrideLaunch;
-                      setOverrideLaunch(next);
-                      if (!next) {
-                        onUpdate({ ...workspace, launchProfile: undefined });
-                      } else if (profileState) {
-                        onUpdate({
-                          ...workspace,
-                          launchProfile: buildProfile(profileState),
-                        });
-                      }
-                    }}
-                  />
-                  Override launch profile for this space
-                </label>
-                <p className="text-xs text-fg-muted">
-                  When off, this space inherits{" "}
-                  {wing?.launchProfile ? "the wing's" : "the global"} launch
-                  profile.
-                </p>
-                {overrideLaunch && profileState && (
-                  <div className="flex flex-col gap-3">
-                    <LaunchProfileEditor
-                      state={profileState}
-                      onChange={(next) => {
-                        setProfileState(next);
-                        onUpdate({
-                          ...workspace,
-                          launchProfile: buildProfile(next),
-                        });
-                      }}
-                      tools={tools}
-                    />
-                  </div>
-                )}
+                <label className="form-label">Launcher</label>
+                <LauncherPicker
+                  scope="workspace"
+                  value={workspace.launchProfile ?? null}
+                  inheritedFromLabel="wing"
+                  inheritedFromName={
+                    launcherProfiles.find(
+                      (p) =>
+                        p.id === (wing?.launchProfile ?? launcherGlobalDefault),
+                    )?.name
+                  }
+                  onChange={(id) =>
+                    onUpdate({
+                      ...workspace,
+                      launchProfile: id ?? undefined,
+                    })
+                  }
+                />
               </div>
 
               <div className="border border-line-danger rounded-md p-4 flex flex-col gap-3">

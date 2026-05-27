@@ -2,20 +2,13 @@ import { readFileSync, mkdirSync, existsSync, readdirSync, rmSync } from "fs";
 import { writeFile, rename, unlink } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import type {
-  Workspace,
-  AtriumConfig,
-  Wing,
-  LaunchAction,
-} from "../shared/types";
+import type { Workspace, AtriumConfig, Wing } from "../shared/types";
 
-const DIR = join(homedir(), ".atrium");
+export const ATRIUM_DIR = join(homedir(), ".atrium");
+const DIR = ATRIUM_DIR;
 const CONFIG_FILE = join(DIR, "config.json");
 const WINGS_DIR = join(DIR, "wings");
-
-const DEFAULT_LAUNCH_PROFILE: LaunchAction[] = [
-  { type: "terminal-tmux", app: "ghostty" },
-];
+export const WINGS_ROOT = WINGS_DIR;
 
 function ensureDir(path: string): void {
   if (!existsSync(path)) mkdirSync(path, { recursive: true });
@@ -100,7 +93,6 @@ export function getConfig(): AtriumConfig {
     return {
       ghPath: "/opt/homebrew/bin/gh",
       setupComplete: false,
-      defaultLaunchProfile: DEFAULT_LAUNCH_PROFILE,
       wingOrder: [],
       activeWingId: null,
     };
@@ -110,10 +102,9 @@ export function getConfig(): AtriumConfig {
   return {
     ghPath: (raw.ghPath as string) ?? "/opt/homebrew/bin/gh",
     setupComplete: (raw.setupComplete as boolean) ?? false,
-    defaultLaunchProfile:
-      (raw.defaultLaunchProfile as LaunchAction[]) ?? DEFAULT_LAUNCH_PROFILE,
     wingOrder: (raw.wingOrder as string[]) ?? [],
     activeWingId: (raw.activeWingId as string | null) ?? null,
+    launchersSchemaVersion: raw.launchersSchemaVersion as number | undefined,
   };
 }
 
@@ -153,7 +144,7 @@ export function getWing(id: string): Wing | null {
 export async function createWing(data: {
   name: string;
   projectDir?: string;
-  launchProfile?: LaunchAction[];
+  launchProfile?: string;
 }): Promise<Wing> {
   ensureDir(WINGS_DIR);
   const id = newWingId(data.name);
@@ -211,19 +202,6 @@ export async function reorderWings(orderedIds: string[]): Promise<void> {
 
 export async function setActiveWing(id: string): Promise<void> {
   await setConfig({ activeWingId: id });
-}
-
-export function getEffectiveLaunchProfile(
-  wingId: string,
-  workspace?: { launchProfile?: LaunchAction[] },
-): LaunchAction[] {
-  const wing = getWing(wingId);
-  const config = getConfig();
-  return (
-    workspace?.launchProfile ??
-    wing?.launchProfile ??
-    config.defaultLaunchProfile
-  );
 }
 
 export function getWingProjectDir(wingId: string): string | undefined {

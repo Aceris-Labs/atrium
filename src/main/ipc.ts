@@ -31,7 +31,16 @@ import {
 } from "path";
 import { homedir } from "os";
 import { getDefaultRepo } from "./github";
-import { launchWorkspace, stopSession } from "./launcher";
+import {
+  launchWorkspace,
+  stopSession,
+  listProfiles,
+  upsertProfile,
+  removeProfile,
+  setGlobalDefault,
+  resolveForWorkspace,
+  getGlobalDefault,
+} from "./launchers";
 import { generateWorkspaceDigest, generateWingSummary } from "./agent/digest";
 import { detectRepo, currentBranch, listWorktrees } from "./git";
 import { detectTools } from "./setup";
@@ -51,7 +60,7 @@ import { cacheStore, orchestrator } from "./cache";
 import type {
   Workspace,
   Wing,
-  LaunchAction,
+  LaunchProfile,
   ConnectorSource,
 } from "../shared/types";
 
@@ -95,7 +104,7 @@ export function registerIpcHandlers(): void {
       data: {
         name: string;
         projectDir?: string;
-        launchProfile?: LaunchAction[];
+        launchProfile?: string;
       },
     ) => createWing(data),
   );
@@ -290,7 +299,24 @@ export function registerIpcHandlers(): void {
   safeHandle("config:set", (_, partial) => setConfig(partial));
 
   // ── Setup detection ──────────────────────────────────────────────────────
-  safeHandle("setup:detect", () => detectTools());
+  // Cached in main; pass force=true (wizard Re-check) to bypass.
+  safeHandle("setup:detect", (_, force?: boolean) => detectTools(!!force));
+
+  // ── Launchers ────────────────────────────────────────────────────────────
+  safeHandle("launchers:list", () => ({
+    profiles: listProfiles(),
+    globalDefault: getGlobalDefault(),
+  }));
+  safeHandle("launchers:upsert", (_, profile: LaunchProfile) =>
+    upsertProfile(profile),
+  );
+  safeHandle("launchers:remove", (_, id: string) => removeProfile(id));
+  safeHandle("launchers:setGlobalDefault", (_, id: string) =>
+    setGlobalDefault(id),
+  );
+  safeHandle("launchers:resolve", (_, wingId: string, workspaceId: string) =>
+    resolveForWorkspace(wingId, workspaceId),
+  );
 
   // ── Filesystem helpers (for path completion) ─────────────────────────────
   safeHandle("fs:listDirs", (_, partial: string) => listDirs(partial));

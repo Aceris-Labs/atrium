@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import type { AgentSessionInfo } from "../shared/types";
-import { TMUX_BIN } from "./launcher"; // used only by listAvailableSessions
+import { TMUX_BIN } from "./launchers/exec"; // used only by listAvailableSessions
 
 // Hook-driven status files: ~/.claude/workstream-status/<tmux-session>
 // Written by ~/bin/claude-status from Notification/UserPromptSubmit/Stop hooks.

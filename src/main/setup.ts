@@ -1,6 +1,9 @@
-import { spawnSync } from "child_process";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { existsSync } from "fs";
 import type { DetectedTools, ToolStatus } from "../shared/types";
+
+const execFileP = promisify(execFile);
 
 const GH_PATHS = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"];
 
@@ -28,41 +31,63 @@ function findBinary(paths: string[]): string | undefined {
   return paths.find((p) => existsSync(p));
 }
 
-function whichBinary(name: string): string | undefined {
-  const result = spawnSync("which", [name], { encoding: "utf-8" });
-  if (result.status === 0 && result.stdout.trim()) return result.stdout.trim();
-  return undefined;
+async function whichBinary(name: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileP("/usr/bin/which", [name]);
+    const trimmed = stdout.trim();
+    return trimmed || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function validateGh(): ToolStatus {
-  const path = findBinary(GH_PATHS) ?? whichBinary("gh");
+async function validateGh(): Promise<ToolStatus> {
+  const path = findBinary(GH_PATHS) ?? (await whichBinary("gh"));
   if (!path) return { installed: false };
 
-  // Check auth status
-  const auth = spawnSync(path, ["auth", "status"], { encoding: "utf-8" });
-  const authenticated = auth.status === 0;
-  const usernameMatch =
-    (auth.stdout + auth.stderr).match(
-      /Logged in to github\.com.*?account\s+(\S+)/i,
-    ) ?? (auth.stdout + auth.stderr).match(/(\S+)\s+\(/);
-  const username = usernameMatch?.[1];
-
-  return { installed: true, path, authenticated, username };
+  try {
+    const { stdout, stderr } = await execFileP(path, ["auth", "status"]);
+    const combined = stdout + stderr;
+    const usernameMatch =
+      combined.match(/Logged in to github\.com.*?account\s+(\S+)/i) ??
+      combined.match(/(\S+)\s+\(/);
+    return {
+      installed: true,
+      path,
+      authenticated: true,
+      username: usernameMatch?.[1],
+    };
+  } catch (e) {
+    // Non-zero exit (not authenticated) still includes useful stdout/stderr.
+    const err = e as { stdout?: string; stderr?: string };
+    const combined = (err.stdout ?? "") + (err.stderr ?? "");
+    const usernameMatch =
+      combined.match(/Logged in to github\.com.*?account\s+(\S+)/i) ??
+      combined.match(/(\S+)\s+\(/);
+    return {
+      installed: true,
+      path,
+      authenticated: false,
+      username: usernameMatch?.[1],
+    };
+  }
 }
 
-function validateClaude(): ToolStatus {
-  const path = whichBinary("claude");
+async function validateClaude(): Promise<ToolStatus> {
+  const path = await whichBinary("claude");
   if (!path) return { installed: false };
 
-  const result = spawnSync(path, ["--version"], { encoding: "utf-8" });
-  const version = result.stdout?.trim() || undefined;
-
-  return { installed: true, path, version };
+  try {
+    const { stdout } = await execFileP(path, ["--version"]);
+    return { installed: true, path, version: stdout.trim() || undefined };
+  } catch {
+    return { installed: true, path };
+  }
 }
 
-function validateEditor(name: string): ToolStatus {
+async function validateEditor(name: string): Promise<ToolStatus> {
   const paths = EDITOR_APPS[name] ?? [];
-  const path = findBinary(paths) ?? whichBinary(name);
+  const path = findBinary(paths) ?? (await whichBinary(name));
   if (!path) return { installed: false };
   return { installed: true, path };
 }
@@ -74,19 +99,42 @@ function validateTerminal(name: string): ToolStatus {
   return { installed: true, path };
 }
 
-export function detectTools(): DetectedTools {
-  return {
-    gh: validateGh(),
-    claude: validateClaude(),
-    editors: {
-      cursor: validateEditor("cursor"),
-      code: validateEditor("code"),
-    },
-    terminals: {
-      ghostty: validateTerminal("ghostty"),
-      iterm: validateTerminal("iterm"),
-      terminal: validateTerminal("terminal"),
-      warp: validateTerminal("warp"),
-    },
-  };
+let cachedTools: DetectedTools | null = null;
+let inFlight: Promise<DetectedTools> | null = null;
+
+export async function detectTools(force = false): Promise<DetectedTools> {
+  if (cachedTools && !force) return cachedTools;
+  if (inFlight && !force) return inFlight;
+
+  inFlight = (async () => {
+    const [gh, claude, cursor, code] = await Promise.all([
+      validateGh(),
+      validateClaude(),
+      validateEditor("cursor"),
+      validateEditor("code"),
+    ]);
+    const tools: DetectedTools = {
+      gh,
+      claude,
+      editors: { cursor, code },
+      terminals: {
+        ghostty: validateTerminal("ghostty"),
+        iterm: validateTerminal("iterm"),
+        terminal: validateTerminal("terminal"),
+        warp: validateTerminal("warp"),
+      },
+    };
+    cachedTools = tools;
+    return tools;
+  })();
+
+  try {
+    return await inFlight;
+  } finally {
+    inFlight = null;
+  }
+}
+
+export function clearToolsCache(): void {
+  cachedTools = null;
 }

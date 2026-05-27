@@ -3,7 +3,7 @@ import type {
   Workspace,
   Wing,
   WindowApi,
-  LaunchAction,
+  LaunchProfile,
   ConnectorSource,
   AgentSessionInfo,
   PRStatus,
@@ -17,7 +17,7 @@ const api: WindowApi = {
     create: (data: {
       name: string;
       projectDir?: string;
-      launchProfile?: LaunchAction[];
+      launchProfile?: string;
     }) => ipcRenderer.invoke("wings:create", data),
     update: (wing: Wing) => ipcRenderer.invoke("wings:update", wing),
     reorder: (orderedIds: string[]) =>
@@ -113,7 +113,17 @@ const api: WindowApi = {
     set: (partial: object) => ipcRenderer.invoke("config:set", partial),
   },
   setup: {
-    detect: () => ipcRenderer.invoke("setup:detect"),
+    detect: (force?: boolean) => ipcRenderer.invoke("setup:detect", force),
+  },
+  launchers: {
+    list: () => ipcRenderer.invoke("launchers:list"),
+    upsert: (profile: LaunchProfile) =>
+      ipcRenderer.invoke("launchers:upsert", profile),
+    remove: (id: string) => ipcRenderer.invoke("launchers:remove", id),
+    setGlobalDefault: (id: string) =>
+      ipcRenderer.invoke("launchers:setGlobalDefault", id),
+    resolve: (wingId: string, workspaceId: string) =>
+      ipcRenderer.invoke("launchers:resolve", wingId, workspaceId),
   },
   git: {
     detectRepo: (dirPath: string) =>
