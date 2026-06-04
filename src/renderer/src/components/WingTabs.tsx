@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { XMarkIcon } from "@heroicons/react/20/solid";
 import type { Wing } from "../../../shared/types";
 
 interface Props {
@@ -148,7 +149,7 @@ export function WingTabs({
                 }}
                 title="Delete wing"
               >
-                ×
+                <XMarkIcon className="w-3 h-3" />
               </button>
             )}
           </div>

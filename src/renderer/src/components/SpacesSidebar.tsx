@@ -748,7 +748,9 @@ function BulkActionBar({
             setShowStatusMenu(false);
           }}
         >
-          Group ▾
+          <span className="inline-flex items-center gap-1">
+            Group <ChevronDownIcon className="w-3 h-3" />
+          </span>
         </button>
         {showGroupMenu && (
           <>
@@ -805,7 +807,9 @@ function BulkActionBar({
             setShowGroupMenu(false);
           }}
         >
-          Status ▾
+          <span className="inline-flex items-center gap-1">
+            Status <ChevronDownIcon className="w-3 h-3" />
+          </span>
         </button>
         {showStatusMenu && (
           <>
@@ -856,7 +860,7 @@ function BulkActionBar({
         onClick={onClear}
         title="Clear selection"
       >
-        ✕
+        <XMarkIcon className="w-3.5 h-3.5" />
       </button>
     </div>
   );

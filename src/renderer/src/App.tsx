@@ -4,6 +4,7 @@ import {
   ArrowPathIcon,
   Cog6ToothIcon,
   ArrowLeftIcon,
+  XMarkIcon,
 } from "@heroicons/react/20/solid";
 import { WorkspaceDetail } from "./components/WorkspaceDetail";
 import { AddWorkspaceModal } from "./components/AddWorkspaceModal";
@@ -733,10 +734,6 @@ export default function App() {
             await reloadWings();
             syncAll();
           }}
-          onRerunSetup={async () => {
-            await window.api.config.set({ setupComplete: false });
-            setSetupDone(false);
-          }}
         />
       )}
     </div>
@@ -892,7 +889,7 @@ function PRsPanel({
               onClick={() => onRemoveWatched(pr.number)}
               title="Stop watching"
             >
-              ×
+              <XMarkIcon className="w-3.5 h-3.5" />
             </button>
           </div>
         ))}

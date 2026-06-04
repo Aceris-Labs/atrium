@@ -1,3 +1,4 @@
+import { XMarkIcon } from "@heroicons/react/20/solid";
 import type {
   WorkspaceLink,
   LinkStatus,
@@ -66,13 +67,13 @@ function SourceBadge({ source }: { source: string }) {
 function DeleteButton({ onDelete }: { onDelete: () => void }) {
   return (
     <button
-      className="shrink-0 bg-transparent border-none text-fg-muted cursor-pointer opacity-0 group-hover:opacity-100 hover:text-red transition-opacity leading-none px-[2px] text-[15px]"
+      className="shrink-0 bg-transparent border-none text-fg-muted cursor-pointer opacity-0 group-hover:opacity-100 hover:text-red transition-opacity leading-none px-[2px] inline-flex"
       onClick={(e) => {
         e.stopPropagation();
         onDelete();
       }}
     >
-      ×
+      <XMarkIcon className="w-3.5 h-3.5" />
     </button>
   );
 }

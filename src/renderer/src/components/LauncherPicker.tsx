@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ExclamationTriangleIcon } from "@heroicons/react/20/solid";
 import { LauncherProfileEditor } from "./LauncherProfileEditor";
 import type {
   DetectedTools,
@@ -110,7 +111,12 @@ export function LauncherPicker({
       {selected?.description && (
         <p className="text-xs text-fg-muted">{selected.description}</p>
       )}
-      {availability && <p className="text-xs text-red">⚠ {availability}</p>}
+      {availability && (
+        <p className="text-xs text-red inline-flex items-center gap-1">
+          <ExclamationTriangleIcon className="w-3 h-3" />
+          {availability}
+        </p>
+      )}
 
       <div className="flex items-center gap-2">
         <button

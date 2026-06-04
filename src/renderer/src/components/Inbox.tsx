@@ -1,3 +1,4 @@
+import { XMarkIcon } from "@heroicons/react/20/solid";
 import type { InboxItem, InboxKind } from "../../../shared/types";
 
 interface Props {
@@ -138,7 +139,7 @@ function InboxRow({
           }}
           title="Dismiss"
         >
-          ×
+          <XMarkIcon className="w-3 h-3" />
         </button>
       )}
     </div>

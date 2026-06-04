@@ -81,7 +81,10 @@ function cleanBody(raw: string): string {
   s = s.replace(/\*([^*]+)\*/g, "$1");
   s = s.replace(/__([^_]+)__/g, "$1");
   s = s.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
-  s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+  s = s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
   s = s.replace(/\s+/g, " ").trim();
   return s;
 }

@@ -103,12 +103,14 @@ export async function setGlobalDefault(id: string): Promise<void> {
 export function resolveForWorkspace(
   wingId: string,
   workspaceId: string,
+  override?: string,
 ): LaunchProfile {
   const file = readFile();
   const wing = getWing(wingId);
   const workspace = listWorkspaces(wingId).find((w) => w.id === workspaceId);
 
   const candidates = [
+    override,
     workspace?.launchProfile,
     wing?.launchProfile,
     file.globalDefault ?? undefined,

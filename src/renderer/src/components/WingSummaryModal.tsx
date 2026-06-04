@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { ArrowLeftIcon } from "@heroicons/react/20/solid";
 import { Checkbox } from "./Checkbox";
 import type { Workspace, Wing } from "../../../shared/types";
 
@@ -211,7 +212,10 @@ export function WingSummaryModal({ workspaces, wing, onClose }: Props) {
                   setError(null);
                 }}
               >
-                ← Back
+                <span className="inline-flex items-center gap-1">
+                  <ArrowLeftIcon className="w-3.5 h-3.5" />
+                  Back
+                </span>
               </button>
               <button className="btn btn-ghost" onClick={copy}>
                 {copied ? "Copied!" : "Copy"}

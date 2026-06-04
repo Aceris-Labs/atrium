@@ -9,12 +9,11 @@ interface Props {
   wing: Wing;
   onClose: () => void;
   onSave: () => void;
-  onRerunSetup: () => void;
 }
 
-type Tab = "general" | "wing" | "launchers" | "connectors";
+type Tab = "wing" | "launchers" | "connectors";
 
-export function SettingsModal({ wing, onClose, onSave, onRerunSetup }: Props) {
+export function SettingsModal({ wing, onClose, onSave }: Props) {
   const [tab, setTab] = useState<Tab>("wing");
   const [saving, setSaving] = useState(false);
 
@@ -60,7 +59,10 @@ export function SettingsModal({ wing, onClose, onSave, onRerunSetup }: Props) {
       <div
         className="modal"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: 560 }}
+        style={{
+          width: tab === "launchers" ? 780 : 480,
+          maxWidth: "calc(100vw - 48px)",
+        }}
       >
         <div className="modal-title">Settings</div>
 
@@ -76,12 +78,6 @@ export function SettingsModal({ wing, onClose, onSave, onRerunSetup }: Props) {
             onClick={() => setTab("launchers")}
           >
             Launchers
-          </button>
-          <button
-            className={`setup-chip${tab === "general" ? " active" : ""}`}
-            onClick={() => setTab("general")}
-          >
-            General
           </button>
           <button
             className={`setup-chip${tab === "connectors" ? " active" : ""}`}
@@ -121,31 +117,26 @@ export function SettingsModal({ wing, onClose, onSave, onRerunSetup }: Props) {
                 onChange={setWingLauncherId}
               />
             </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving ? "Saving…" : "Save wing"}
+              </button>
+            </div>
           </>
         )}
 
         {tab === "launchers" && <LaunchersPanel />}
 
-        {tab === "general" && (
-          <div className="form-group">
-            <button className="btn btn-ghost" onClick={onRerunSetup}>
-              Re-run setup wizard
-            </button>
-          </div>
-        )}
-
         {tab === "connectors" && <ConnectorsPanel />}
 
         <div className="modal-actions">
           <button className="btn btn-ghost" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleSave}
-            disabled={saving}
-          >
-            {saving ? "Saving…" : "Save"}
+            Close
           </button>
         </div>
       </div>

@@ -1,4 +1,10 @@
 import { useEffect, useState } from "react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  XMarkIcon,
+} from "@heroicons/react/20/solid";
 import type {
   ConnectorSource,
   ConnectorStatus,
@@ -355,7 +361,10 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm text-fg font-medium">{meta.name}</span>
           {status.configured ? (
-            <span className="text-xs text-green">✓ Connected</span>
+            <span className="text-xs text-green inline-flex items-center gap-1">
+              <CheckIcon className="w-3 h-3" />
+              Connected
+            </span>
           ) : (
             <span className="text-xs text-fg-muted">Not connected</span>
           )}
@@ -379,7 +388,13 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
             </>
           )}
         </div>
-        <span className="text-xs text-fg-muted">{expanded ? "▾" : "▸"}</span>
+        <span className="text-fg-muted inline-flex">
+          {expanded ? (
+            <ChevronDownIcon className="w-3.5 h-3.5" />
+          ) : (
+            <ChevronRightIcon className="w-3.5 h-3.5" />
+          )}
+        </span>
       </button>
 
       {expanded && (
@@ -512,10 +527,20 @@ function ConnectorRow({ meta, status, onChange }: RowProps) {
           )}
 
           {result && (
-            <div className={`text-xs ${result.ok ? "text-green" : "text-red"}`}>
-              {result.ok
-                ? `✓ Connected as ${result.identity ?? "unknown"}`
-                : `✗ ${result.error}`}
+            <div
+              className={`text-xs inline-flex items-center gap-1 ${result.ok ? "text-green" : "text-red"}`}
+            >
+              {result.ok ? (
+                <>
+                  <CheckIcon className="w-3 h-3" />
+                  Connected as {result.identity ?? "unknown"}
+                </>
+              ) : (
+                <>
+                  <XMarkIcon className="w-3 h-3" />
+                  {result.error}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -675,7 +700,10 @@ function StrategyRow({
       </span>
       <span className="text-xs text-fg-muted flex-1 min-w-0">
         {s.configured ? (
-          <span className="text-green">✓{s.detail ? ` ${s.detail}` : ""}</span>
+          <span className="text-green inline-flex items-center gap-1">
+            <CheckIcon className="w-3 h-3" />
+            {s.detail ?? ""}
+          </span>
         ) : s.available ? (
           (s.detail ?? "available")
         ) : (

@@ -135,6 +135,22 @@ function buildContext(wingId: string, workspace: Workspace): ExecContext {
   return { wingId, workspace, dir, env, contextFilePath, sessionName };
 }
 
+function cleanParentEnv(): Record<string, string | undefined> {
+  // Strip Electron-host and Node-debugger vars that would break spawned
+  // Electron apps (Cursor, VS Code, Claude CLI). ELECTRON_RUN_AS_NODE makes
+  // the child run as headless Node; the others leak debugger/inspector
+  // state into the child renderer and crash it (exit code 5).
+  const out: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith("ELECTRON_")) continue;
+    if (k.startsWith("VSCODE_")) continue;
+    if (k.startsWith("NODE_INSPECTOR_")) continue;
+    if (k === "NODE_OPTIONS") continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 function spawnDetached(
   bin: string,
   args: string[],
@@ -145,7 +161,7 @@ function spawnDetached(
     detached: true,
     stdio: "ignore",
     cwd,
-    env: { ...process.env, ...env },
+    env: { ...cleanParentEnv(), ...env },
   }).unref();
 }
 
@@ -287,7 +303,7 @@ async function runCommandAction(
     detached: true,
     stdio: "ignore",
     cwd,
-    env: { ...process.env, ...ctx.env },
+    env: { ...cleanParentEnv(), ...ctx.env },
   }).unref();
 }
 
@@ -341,7 +357,7 @@ function openTerminalWithTmux(
           cwd: dir,
           detached: true,
           stdio: "ignore",
-          env: { ...process.env, ...env },
+          env: { ...cleanParentEnv(), ...env },
         },
       ).unref();
       break;
@@ -470,8 +486,13 @@ export async function executeProfile(
 export async function launchWorkspace(
   wingId: string,
   workspace: Workspace,
+  launchProfileOverride?: string,
 ): Promise<string> {
-  const profile = resolveForWorkspace(wingId, workspace.id);
+  const profile = resolveForWorkspace(
+    wingId,
+    workspace.id,
+    launchProfileOverride,
+  );
   const ctx = buildContext(wingId, workspace);
   const existingIds = ctx.dir
     ? listJsonlSessionIds(ctx.dir)

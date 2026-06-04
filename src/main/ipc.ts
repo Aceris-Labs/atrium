@@ -157,8 +157,10 @@ export function registerIpcHandlers(): void {
   );
 
   // ── Workspace launch (wing-scoped for launch profile) ────────────────────
-  safeHandle("workspace:launch", (_, wingId: string, workspace: Workspace) =>
-    launchWorkspace(wingId, workspace),
+  safeHandle(
+    "workspace:launch",
+    (_, wingId: string, workspace: Workspace, launchProfileOverride?: string) =>
+      launchWorkspace(wingId, workspace, launchProfileOverride),
   );
   safeHandle("workspace:stop", (_, workspaceId: string) =>
     stopSession(workspaceId),

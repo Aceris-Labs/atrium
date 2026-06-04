@@ -46,8 +46,17 @@ const api: WindowApi = {
       ipcRenderer.invoke("github:defaultRepo", wingId),
   },
   workspace: {
-    launch: (wingId: string, workspace: Workspace) =>
-      ipcRenderer.invoke("workspace:launch", wingId, workspace),
+    launch: (
+      wingId: string,
+      workspace: Workspace,
+      launchProfileOverride?: string,
+    ) =>
+      ipcRenderer.invoke(
+        "workspace:launch",
+        wingId,
+        workspace,
+        launchProfileOverride,
+      ),
     stop: (workspaceId: string) =>
       ipcRenderer.invoke("workspace:stop", workspaceId),
     generateDigest: (workspace: Workspace) =>

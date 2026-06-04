@@ -1,4 +1,9 @@
 import { useEffect, useState } from "react";
+import {
+  CheckIcon,
+  XMarkIcon,
+  ExclamationTriangleIcon,
+} from "@heroicons/react/20/solid";
 import { PathInput } from "./PathInput";
 import { LauncherPicker } from "./LauncherPicker";
 import type { DetectedTools, ToolStatus } from "../../../shared/types";
@@ -12,10 +17,22 @@ const STEPS: Step[] = ["gh", "launcher", "wing", "done"];
 
 function StatusIcon({ status }: { status: ToolStatus }) {
   if (!status.installed)
-    return <span className="setup-icon setup-icon-missing">✗</span>;
+    return (
+      <span className="setup-icon setup-icon-missing inline-flex">
+        <XMarkIcon className="w-3.5 h-3.5" />
+      </span>
+    );
   if (status.authenticated === false)
-    return <span className="setup-icon setup-icon-warn">!</span>;
-  return <span className="setup-icon setup-icon-ok">✓</span>;
+    return (
+      <span className="setup-icon setup-icon-warn inline-flex">
+        <ExclamationTriangleIcon className="w-3.5 h-3.5" />
+      </span>
+    );
+  return (
+    <span className="setup-icon setup-icon-ok inline-flex">
+      <CheckIcon className="w-3.5 h-3.5" />
+    </span>
+  );
 }
 
 export function SetupWizard({ onComplete }: Props) {

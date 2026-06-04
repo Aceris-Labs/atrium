@@ -38,7 +38,7 @@ const REVIEW_CLASS: Record<string, string> = {
 };
 
 const MERGE_BADGE: Record<string, { label: string; cls: string } | null> = {
-  QUEUED: { label: "queued to merge", cls: "merge-queued" },
+  QUEUED: null, // promoted to a top-row state badge alongside merged/closed
   CLEAN: null, // ready to merge, but not special enough to badge
   BLOCKED: { label: "blocked", cls: "merge-blocked" },
   BEHIND: { label: "behind base", cls: "merge-behind" },
@@ -90,6 +90,9 @@ export function PRCard({
           )}
           {pr.state === "closed" && (
             <span className="badge closed">closed</span>
+          )}
+          {pr.state === "open" && pr.mergeState === "QUEUED" && (
+            <span className="badge merge-queued">queued</span>
           )}
           {pr.isDraft && pr.state === "open" && (
             <span className="badge draft">draft</span>
@@ -144,9 +147,7 @@ export function PRCard({
             </span>
           )}
           {pr.state === "open" && pr.author && !pr.reviewDecision && (
-            <span className="text-xs text-fg-muted shrink-0">
-              @{pr.author}
-            </span>
+            <span className="text-xs text-fg-muted shrink-0">@{pr.author}</span>
           )}
         </div>
       </div>

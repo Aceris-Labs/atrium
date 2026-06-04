@@ -205,6 +205,10 @@ export function hydrateViaAgent(
     const proc = spawn(claudePath, [
       "-p",
       buildPrompt(url),
+      "--model",
+      "claude-haiku-4-5-20251001",
+      "--max-tokens",
+      "512",
       "--output-format",
       "json",
       "--json-schema",
@@ -217,7 +221,7 @@ export function hydrateViaAgent(
     });
 
     const timer = setTimeout(() => {
-      proc.kill();
+      proc.kill("SIGKILL");
       resolve(err("network"));
     }, 60_000);
 

@@ -1,4 +1,10 @@
 import { useEffect, useState } from "react";
+import {
+  ChevronUpIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  XMarkIcon,
+} from "@heroicons/react/20/solid";
 import { Checkbox } from "./Checkbox";
 import type {
   DetectedTools,
@@ -126,7 +132,7 @@ export function LauncherProfileEditor({
               <span className="text-xs text-fg-muted bg-bg-input px-1 rounded-sm">
                 {action.type}
               </span>
-              <span className="text-sm text-fg flex-1 min-w-0 truncate">
+              <span className="text-sm text-fg flex-1 min-w-0 break-words">
                 {summarize(action)}
               </span>
               {!readOnly && (
@@ -138,7 +144,7 @@ export function LauncherProfileEditor({
                     disabled={idx === 0}
                     title="Move up"
                   >
-                    ↑
+                    <ChevronUpIcon className="w-3.5 h-3.5" />
                   </button>
                   <button
                     type="button"
@@ -147,7 +153,7 @@ export function LauncherProfileEditor({
                     disabled={idx === profile.actions.length - 1}
                     title="Move down"
                   >
-                    ↓
+                    <ChevronDownIcon className="w-3.5 h-3.5" />
                   </button>
                   <button
                     type="button"
@@ -155,7 +161,7 @@ export function LauncherProfileEditor({
                     onClick={() => deleteAction(idx)}
                     title="Delete"
                   >
-                    ✕
+                    <XMarkIcon className="w-3.5 h-3.5" />
                   </button>
                 </>
               )}
@@ -166,7 +172,11 @@ export function LauncherProfileEditor({
                   setExpandedAction(expandedAction === idx ? null : idx)
                 }
               >
-                {expandedAction === idx ? "▾" : "▸"}
+                {expandedAction === idx ? (
+                  <ChevronDownIcon className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronRightIcon className="w-3.5 h-3.5" />
+                )}
               </button>
             </div>
             {expandedAction === idx && (
@@ -516,23 +526,26 @@ function TmuxActionEditor({
                     className="btn btn-ghost btn-sm"
                     onClick={() => movePane(idx, -1)}
                     disabled={idx === 0}
+                    title="Move up"
                   >
-                    ↑
+                    <ChevronUpIcon className="w-3.5 h-3.5" />
                   </button>
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
                     onClick={() => movePane(idx, 1)}
                     disabled={idx === action.panes.length - 1}
+                    title="Move down"
                   >
-                    ↓
+                    <ChevronDownIcon className="w-3.5 h-3.5" />
                   </button>
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
                     onClick={() => deletePane(idx)}
+                    title="Delete"
                   >
-                    ✕
+                    <XMarkIcon className="w-3.5 h-3.5" />
                   </button>
                 </>
               )}

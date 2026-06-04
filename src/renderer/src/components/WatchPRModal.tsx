@@ -42,9 +42,7 @@ export function WatchPRModal({ onWatch, onClose }: Props) {
               // eslint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
             />
-            {error && (
-              <div className="text-red text-sm mt-1">{error}</div>
-            )}
+            {error && <div className="text-red text-sm mt-1">{error}</div>}
           </div>
 
           <div className="modal-actions">

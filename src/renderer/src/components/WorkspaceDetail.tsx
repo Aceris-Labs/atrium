@@ -7,6 +7,8 @@ import {
   ArrowPathIcon,
   PlusIcon,
   TrashIcon,
+  ChevronDownIcon,
+  ExclamationTriangleIcon,
 } from "@heroicons/react/20/solid";
 import { PRCard, PRCardSkeleton } from "./PRCard";
 import { LinkCard } from "./LinkCard";
@@ -190,6 +192,7 @@ export function WorkspaceDetail({
     { name: string; status: string }[]
   >([]);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
+  const [showLauncherMenu, setShowLauncherMenu] = useState(false);
 
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [showTypePicker, setShowTypePicker] = useState(false);
@@ -479,10 +482,15 @@ export function WorkspaceDetail({
     });
   }
 
-  async function handleLaunch() {
+  async function handleLaunch(launcherIdOverride?: string) {
     setLaunchError(null);
+    setShowLauncherMenu(false);
     try {
-      const sessionName = await window.api.workspace.launch(wingId, workspace);
+      const sessionName = await window.api.workspace.launch(
+        wingId,
+        workspace,
+        launcherIdOverride,
+      );
       if (!workspace.tmuxSession) {
         onUpdate({ ...workspace, tmuxSession: sessionName });
       }
@@ -668,10 +676,10 @@ export function WorkspaceDetail({
                 workspace.branch &&
                 actualBranch !== workspace.branch && (
                   <span
-                    className="text-xs text-yellow"
+                    className="text-yellow inline-flex"
                     title={`Diverged from saved focus '${workspace.branch}'. Launch will check out the saved branch.`}
                   >
-                    ⚠
+                    <ExclamationTriangleIcon className="w-3.5 h-3.5" />
                   </span>
                 )}
             </button>
@@ -862,14 +870,69 @@ export function WorkspaceDetail({
             )}
           </div>
 
-          <button
-            className="inline-flex items-center gap-1.5 px-[14px] py-[6px] bg-blue text-white text-sm font-semibold rounded-sm hover:brightness-90 cursor-pointer"
-            onClick={() => handleLaunch()}
-            title="Launch this space"
-          >
-            <PlayIcon className="w-3.5 h-3.5" />
-            Launch
-          </button>
+          <div className="relative inline-flex items-stretch">
+            <button
+              className="inline-flex items-center gap-1.5 px-[14px] py-[6px] bg-blue text-white text-sm font-semibold rounded-l-sm hover:brightness-90 cursor-pointer"
+              onClick={() => handleLaunch()}
+              title="Launch this space"
+            >
+              <PlayIcon className="w-3.5 h-3.5" />
+              Launch
+            </button>
+            <div className="w-px bg-white/20" />
+            <button
+              className="inline-flex items-center px-2 bg-blue text-white rounded-r-sm hover:brightness-90 cursor-pointer"
+              onClick={() => setShowLauncherMenu((p) => !p)}
+              title="Launch with…"
+              aria-label="Launch with another launcher"
+            >
+              <ChevronDownIcon className="w-3.5 h-3.5" />
+            </button>
+            {showLauncherMenu && (
+              <>
+                <div
+                  className="gear-menu-backdrop"
+                  onClick={() => setShowLauncherMenu(false)}
+                />
+                <div
+                  className="gear-menu"
+                  style={{
+                    minWidth: 180,
+                    top: "100%",
+                    right: 0,
+                    left: "auto",
+                    marginTop: 4,
+                  }}
+                >
+                  <div className="px-3 py-1 text-xs text-fg-muted uppercase tracking-[0.05em]">
+                    Launch with
+                  </div>
+                  {launcherProfiles
+                    .filter(
+                      (p) =>
+                        p.id !==
+                        (workspace.launchProfile ??
+                          wing?.launchProfile ??
+                          launcherGlobalDefault),
+                    )
+                    .map((p) => (
+                      <button
+                        key={p.id}
+                        className="gear-menu-item"
+                        onClick={() => handleLaunch(p.id)}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  {launcherProfiles.length <= 1 && (
+                    <div className="px-3 py-2 text-xs text-fg-muted italic">
+                      No other launchers
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
           {launchError && (
             <span
               className="text-xs text-red max-w-[280px] truncate"
@@ -1048,7 +1111,7 @@ export function WorkspaceDetail({
                             }
                             title="Unlink PR"
                           >
-                            ×
+                            <XMarkIcon className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       );
@@ -1071,7 +1134,7 @@ export function WorkspaceDetail({
                             onClick={() => handleRemovePR(p.repo, p.number)}
                             title="Unlink PR"
                           >
-                            ×
+                            <XMarkIcon className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       ))}
