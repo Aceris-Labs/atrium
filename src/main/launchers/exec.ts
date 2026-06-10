@@ -174,6 +174,45 @@ function activateApp(appKey: string): void {
   }).unref();
 }
 
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildEnvExportCommands(env: Record<string, string>): string[] {
+  return Object.entries(env).map(
+    ([key, value]) => `export ${key}=${shellSingleQuote(value)}`,
+  );
+}
+
+function warpNewWindowUri(dir: string): string {
+  return `warp://action/new_window?path=${encodeURIComponent(dir)}`;
+}
+
+function openWarpWindow(
+  dir: string,
+  env: Record<string, string>,
+  command?: string,
+): void {
+  spawnDetached("open", ["-u", warpNewWindowUri(dir)], env, dir);
+
+  const startupCommand = [...buildEnvExportCommands(env), command]
+    .filter((cmd): cmd is string => Boolean(cmd))
+    .join(" && ");
+  if (!startupCommand) return;
+
+  setTimeout(() => {
+    spawnDetached(
+      "osascript",
+      [
+        "-e",
+        `tell application "Warp" to do script ${JSON.stringify(startupCommand)}`,
+      ],
+      env,
+      dir,
+    );
+  }, 750);
+}
+
 // ── Action runners ───────────────────────────────────────────────────────────
 
 async function runEditorAction(
@@ -184,7 +223,7 @@ async function runEditorAction(
     throw new Error("editor action requires a workspace directory");
   }
   const bin = action.app; // `cursor`, `code`, etc. on PATH
-  spawnDetached(bin, ["--new-window", ctx.dir], ctx.env);
+  spawnDetached(bin, ["--new-window", ctx.dir], ctx.env, ctx.dir);
 
   if (action.app === "code" && action.withClaude) {
     const prompt = `Workspace context for this session:\n\n${
@@ -216,6 +255,8 @@ async function runTerminalAction(
       );
       break;
     case "warp":
+      openWarpWindow(ctx.dir, ctx.env, command);
+      break;
     case "terminal":
     case "iterm": {
       const appName = TERMINAL_APP_NAMES[action.app];
@@ -372,11 +413,7 @@ function openTerminalWithTmux(
       );
       break;
     case "warp":
-      spawnDetached(
-        "osascript",
-        ["-e", `tell application "Warp" to do script "${attachCmd}"`],
-        env,
-      );
+      openWarpWindow(dir, env, attachCmd);
       break;
     case "terminal":
       spawnDetached(

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Workspace } from "../../../shared/types";
+import { PathInput } from "./PathInput";
 
 type Tab = "create" | "script";
 
@@ -116,11 +117,10 @@ export function CreateWorktreeModal({
               </div>
               <div className="form-group">
                 <label className="form-label">Worktree path</label>
-                <input
-                  className="form-input"
+                <PathInput
                   value={path}
-                  onChange={(e) => {
-                    setPath(e.target.value);
+                  onChange={(value) => {
+                    setPath(value);
                     setPathEdited(true);
                   }}
                   placeholder={suggestPath(projectDir, "my-feature")}
@@ -140,10 +140,9 @@ export function CreateWorktreeModal({
             <>
               <div className="form-group">
                 <label className="form-label">Command</label>
-                <input
-                  className="form-input"
+                <PathInput
                   value={command}
-                  onChange={(e) => setCommand(e.target.value)}
+                  onChange={setCommand}
                   placeholder="./scripts/new-worktree.sh my-feature"
                   autoFocus
                 />

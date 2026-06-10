@@ -64,7 +64,7 @@ export default function App() {
     Map<string, Set<string>>
   >(new Map());
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
-  const [mainTab, setMainTab] = useState<MainTab>("inbox");
+  const [mainTab, setMainTab] = useState<MainTab>("prs");
   const wingsRef = useRef<Wing[]>([]);
   wingsRef.current = wings;
 
@@ -631,17 +631,17 @@ export default function App() {
               <>
                 <div className="flex border-b border-line bg-bg shrink-0 px-8">
                   <TabButton
+                    active={mainTab === "prs"}
+                    onClick={() => setMainTab("prs")}
+                  >
+                    PRs
+                  </TabButton>
+                  <TabButton
                     active={mainTab === "inbox"}
                     onClick={() => setMainTab("inbox")}
                     count={inboxItems.length || undefined}
                   >
                     Inbox
-                  </TabButton>
-                  <TabButton
-                    active={mainTab === "prs"}
-                    onClick={() => setMainTab("prs")}
-                  >
-                    PRs
                   </TabButton>
                   <TabButton
                     active={mainTab === "items"}
@@ -652,19 +652,7 @@ export default function App() {
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   <div className="max-w-[1800px] mx-auto px-8 py-5">
-                    {mainTab === "inbox" ? (
-                      <Inbox
-                        items={inboxItems}
-                        onDismiss={(item) => {
-                          const key = inboxKey(item);
-                          setDismissedInbox((prev) => {
-                            const next = new Set(prev);
-                            next.add(key);
-                            return next;
-                          });
-                        }}
-                      />
-                    ) : mainTab === "prs" ? (
+                    {mainTab === "prs" ? (
                       <PRsPanel
                         unlinkedReviews={openReviews}
                         unlinkedMyPRs={openMyPRs}
@@ -678,6 +666,18 @@ export default function App() {
                         onRefreshPRs={() => window.api.cache.refreshPRs()}
                         prKey={prKey}
                         spaceTitleFor={(pr) => prSpaceTitles.get(prKey(pr))}
+                      />
+                    ) : mainTab === "inbox" ? (
+                      <Inbox
+                        items={inboxItems}
+                        onDismiss={(item) => {
+                          const key = inboxKey(item);
+                          setDismissedInbox((prev) => {
+                            const next = new Set(prev);
+                            next.add(key);
+                            return next;
+                          });
+                        }}
                       />
                     ) : (
                       <div className="h-[calc(100vh-260px)] min-h-[400px]">

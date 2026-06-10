@@ -46,6 +46,7 @@ export function ItemsTab({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [insertBeforeId, setInsertBeforeId] = useState<string | null>(null);
   const [autoFocusId, setAutoFocusId] = useState<string | null>(null);
+  const [titleDrafts, setTitleDrafts] = useState<Record<string, string>>({});
 
   const expanded = expandedId
     ? (items.find((i) => i.id === expandedId) ?? null)
@@ -53,6 +54,55 @@ export function ItemsTab({
 
   const active = items.filter((i) => !i.done);
   const done = items.filter((i) => i.done);
+
+  useEffect(() => {
+    setTitleDrafts((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [id, title] of Object.entries(prev)) {
+        const item = items.find((i) => i.id === id);
+        if (!item || item.title === title) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [items]);
+
+  function getTitleValue(item: Item) {
+    return titleDrafts[item.id] ?? item.title;
+  }
+
+  function handleTitleDraftChange(id: string, title: string) {
+    setTitleDrafts((prev) =>
+      prev[id] === title ? prev : { ...prev, [id]: title },
+    );
+  }
+
+  function clearTitleDraft(id: string) {
+    setTitleDrafts((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function handleTitleCommit(id: string, title: string) {
+    const trimmed = title.trim();
+    const item = items.find((i) => i.id === id);
+    if (!item) {
+      clearTitleDraft(id);
+      return;
+    }
+    if (trimmed === item.title) {
+      clearTitleDraft(id);
+      return;
+    }
+    setTitleDrafts((prev) => ({ ...prev, [id]: trimmed }));
+    handleUpdate(id, { title: trimmed });
+  }
 
   function handleAdd() {
     const now = new Date().toISOString();
@@ -135,8 +185,13 @@ export function ItemsTab({
               dragging={draggingId === item.id}
               insertLineBefore={insertBeforeId === item.id}
               autoFocus={autoFocusId === item.id}
+              titleValue={getTitleValue(item)}
               onAutoFocused={() => setAutoFocusId(null)}
-              onTitleChange={(title) => handleUpdate(item.id, { title })}
+              onTitleDraftChange={(title) =>
+                handleTitleDraftChange(item.id, title)
+              }
+              onTitleCommit={(title) => handleTitleCommit(item.id, title)}
+              onTitleCancel={() => clearTitleDraft(item.id)}
               onToggleDone={() => handleUpdate(item.id, { done: !item.done })}
               onToggleExpand={() =>
                 setExpandedId((prev) => (prev === item.id ? null : item.id))
@@ -202,7 +257,12 @@ export function ItemsTab({
                 expanded={expandedId === item.id}
                 dragging={false}
                 insertLineBefore={false}
-                onTitleChange={(title) => handleUpdate(item.id, { title })}
+                titleValue={getTitleValue(item)}
+                onTitleDraftChange={(title) =>
+                  handleTitleDraftChange(item.id, title)
+                }
+                onTitleCommit={(title) => handleTitleCommit(item.id, title)}
+                onTitleCancel={() => clearTitleDraft(item.id)}
                 onToggleDone={() => handleUpdate(item.id, { done: !item.done })}
                 onToggleExpand={() =>
                   setExpandedId((prev) => (prev === item.id ? null : item.id))
@@ -219,6 +279,11 @@ export function ItemsTab({
           <ItemDetailPanel
             key={expanded.id}
             item={expanded}
+            titleValue={getTitleValue(expanded)}
+            onTitleDraftChange={(title) =>
+              handleTitleDraftChange(expanded.id, title)
+            }
+            onTitleCommit={(title) => handleTitleCommit(expanded.id, title)}
             onUpdate={(patch) => handleUpdate(expanded.id, patch)}
             onDelete={() => handleDelete(expanded.id)}
             onClose={() => setExpandedId(null)}
@@ -235,8 +300,11 @@ interface ItemRowProps {
   dragging: boolean;
   insertLineBefore: boolean;
   autoFocus?: boolean;
+  titleValue: string;
   onAutoFocused?: () => void;
-  onTitleChange: (title: string) => void;
+  onTitleDraftChange: (title: string) => void;
+  onTitleCommit: (title: string) => void;
+  onTitleCancel: () => void;
   onToggleDone: () => void;
   onToggleExpand: () => void;
   onDelete: () => void;
@@ -252,8 +320,11 @@ function ItemRow({
   dragging,
   insertLineBefore,
   autoFocus,
+  titleValue,
   onAutoFocused,
-  onTitleChange,
+  onTitleDraftChange,
+  onTitleCommit,
+  onTitleCancel,
   onToggleDone,
   onToggleExpand,
   onDelete,
@@ -266,10 +337,11 @@ function ItemRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.title);
   const inputRef = useRef<HTMLInputElement>(null);
+  const skipCommitRef = useRef(false);
 
   useEffect(() => {
-    setDraft(item.title);
-  }, [item.title]);
+    setDraft(titleValue);
+  }, [titleValue]);
 
   useEffect(() => {
     if (autoFocus) {
@@ -283,10 +355,19 @@ function ItemRow({
   }, [editing]);
 
   function commit() {
-    const t = draft.trim();
-    if (t !== item.title) onTitleChange(t);
+    if (skipCommitRef.current) {
+      skipCommitRef.current = false;
+      setEditing(false);
+      return;
+    }
+    onTitleCommit(draft);
     setEditing(false);
   }
+
+  const inputWidthCh = Math.min(
+    Math.max((draft || "(untitled)").length + 1, 10),
+    48,
+  );
 
   return (
     <>
@@ -318,11 +399,16 @@ function ItemRow({
         {editing ? (
           <input
             ref={inputRef}
-            className={`flex-1 min-w-0 bg-transparent border-none outline-none text-sm ${
+            className={`min-w-[10ch] max-w-full shrink bg-transparent border-none outline-none text-sm ${
               item.done ? "line-through text-fg-muted" : "text-fg"
             }`}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            style={{ width: `${inputWidthCh}ch` }}
+            onChange={(e) => {
+              const next = e.target.value;
+              setDraft(next);
+              onTitleDraftChange(next);
+            }}
             onBlur={commit}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
@@ -331,8 +417,13 @@ function ItemRow({
                 (e.target as HTMLInputElement).blur();
               }
               if (e.key === "Escape") {
+                skipCommitRef.current = true;
                 setDraft(item.title);
+                onTitleCancel();
                 setEditing(false);
+                window.setTimeout(() => {
+                  skipCommitRef.current = false;
+                }, 0);
               }
             }}
             placeholder="(untitled)"
@@ -343,13 +434,14 @@ function ItemRow({
               e.stopPropagation();
               setEditing(true);
             }}
-            className={`flex-1 min-w-0 text-sm truncate cursor-text ${
+            className={`min-w-0 max-w-full shrink text-sm truncate cursor-text ${
               item.done ? "line-through text-fg-muted" : "text-fg"
-            } ${!item.title ? "italic text-fg-muted" : ""}`}
+            } ${!titleValue ? "italic text-fg-muted" : ""}`}
           >
-            {item.title || "(untitled)"}
+            {titleValue || "(untitled)"}
           </span>
         )}
+        <span className="flex-1 min-w-0" aria-hidden="true" />
         {item.body && (
           <span className="text-fg-muted text-xs shrink-0" title="Has notes">
             ¶
@@ -372,6 +464,9 @@ function ItemRow({
 
 interface ItemDetailPanelProps {
   item: Item;
+  titleValue: string;
+  onTitleDraftChange: (title: string) => void;
+  onTitleCommit: (title: string) => void;
   onUpdate: (patch: Partial<Item>) => void;
   onDelete: () => void;
   onClose: () => void;
@@ -379,27 +474,23 @@ interface ItemDetailPanelProps {
 
 function ItemDetailPanel({
   item,
+  titleValue,
+  onTitleDraftChange,
+  onTitleCommit,
   onUpdate,
   onDelete,
   onClose,
 }: ItemDetailPanelProps) {
-  const [titleDraft, setTitleDraft] = useState(item.title);
   const [bodyDraft, setBodyDraft] = useState(item.body ?? "");
   const [editingBody, setEditingBody] = useState(!item.body);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    setTitleDraft(item.title);
     setBodyDraft(item.body ?? "");
     setEditingBody(!item.body);
     setConfirmDelete(false);
   }, [item.id]);
-
-  function commitTitle() {
-    const t = titleDraft.trim();
-    if (t !== item.title) onUpdate({ title: t });
-  }
 
   function commitBody() {
     const b = bodyDraft.trim();
@@ -417,9 +508,9 @@ function ItemDetailPanel({
         />
         <input
           className={`flex-1 bg-transparent border-none outline-none text-base font-semibold ${item.done ? "line-through text-fg-muted" : "text-fg"}`}
-          value={titleDraft}
-          onChange={(e) => setTitleDraft(e.target.value)}
-          onBlur={commitTitle}
+          value={titleValue}
+          onChange={(e) => onTitleDraftChange(e.target.value)}
+          onBlur={(e) => onTitleCommit(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
