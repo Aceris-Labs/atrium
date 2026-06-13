@@ -1,10 +1,8 @@
 import { deleteSecret, getSecret, setSecret } from "../secrets";
-import { discoverMcpServers } from "../mcp/discovery";
 import { codaConnector } from "./coda";
 import { confluenceConnector } from "./confluence";
 import { figmaConnector } from "./figma";
 import { githubConnector } from "./github";
-import { claudeConnector } from "./claude";
 import { jiraConnector } from "./jira";
 import { linearConnector } from "./linear";
 import { notionConnector } from "./notion";
@@ -13,9 +11,6 @@ import { discordConnector } from "./discord";
 import {
   detectStrategies,
   resolveActiveStrategy,
-  hydrateViaStrategy,
-  SUPPORTED_STRATEGIES,
-  cloudMcpKey,
 } from "./strategy";
 import { err } from "./types";
 import type { Connector } from "./types";
@@ -37,7 +32,6 @@ const CONNECTORS: Connector[] = [
   codaConnector,
   figmaConnector,
   githubConnector,
-  claudeConnector,
 ];
 
 function secretKey(source: ConnectorSource): string {
@@ -85,20 +79,11 @@ export function resolveConnector(url: string): Connector | undefined {
 }
 
 export function listConnectors(): ConnectorStatus[] {
-  const mcpServers = discoverMcpServers();
   return CONNECTORS.map((c) => {
     const raw = getSecret(secretKey(c.source));
-    const hasMcp =
-      mcpServers.has(c.source) &&
-      SUPPORTED_STRATEGIES[c.source].includes("mcp");
-    const hasCloudMcp =
-      getSecret(cloudMcpKey(c.source)) !== undefined &&
-      SUPPORTED_STRATEGIES[c.source].includes("cloud-mcp");
-    const activeStrategy =
-      resolveActiveStrategy(c.source, mcpServers) ?? undefined;
+    const activeStrategy = resolveActiveStrategy(c.source) ?? undefined;
     // CLI-backed connectors override configured status via checkConfigured()
-    const configured =
-      c.checkConfigured?.() ?? (raw !== undefined || hasMcp || hasCloudMcp);
+    const configured = c.checkConfigured?.() ?? raw !== undefined;
     return {
       source: c.source,
       configured,
@@ -118,10 +103,6 @@ export function listConnectorStrategies(
 export async function hydrateOne(url: string): Promise<LinkStatus> {
   const connector = resolveConnector(url);
   if (!connector) return err("unsupported");
-
-  // Try MCP/agent strategy first — returns null if neither is active
-  const strategyResult = await hydrateViaStrategy(connector.source, url);
-  if (strategyResult !== null) return strategyResult;
 
   // For secretless connectors (CLI-backed) pass an empty config object
   const config =
@@ -155,12 +136,4 @@ export function setConnectorConfig(
 
 export function removeConnectorConfig(source: ConnectorSource): void {
   deleteSecret(secretKey(source));
-}
-
-export function enableCloudMcp(source: ConnectorSource): void {
-  setSecret(cloudMcpKey(source), { enabled: true });
-}
-
-export function disableCloudMcp(source: ConnectorSource): void {
-  deleteSecret(cloudMcpKey(source));
 }

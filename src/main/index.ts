@@ -1,7 +1,6 @@
 import { app, BrowserWindow, globalShortcut } from "electron";
 import { join } from "path";
 import { registerIpcHandlers } from "./ipc";
-import { closeAllMcpClients } from "./mcp/client";
 import { startWingsWatcher } from "./wingsWatcher";
 import { cacheStore, orchestrator } from "./cache";
 import { migrateLaunchers } from "./launchers";
@@ -96,7 +95,6 @@ app.on("activate", () => {
 
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
-  closeAllMcpClients();
   wingsWatcher?.stop();
   cacheUnsub?.();
   orchestrator.shutdown();

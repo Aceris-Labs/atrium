@@ -1,6 +1,6 @@
 import { cacheStore } from "./store";
 import type { Refresher } from "./refresher";
-import { PRBucketsRefresher, ExplicitPRsRefresher } from "./refreshers/prs";
+import { PRsRefresher } from "./refreshers/prs";
 import { AgentsRefresher } from "./refreshers/agents";
 import { LinksRefresher } from "./refreshers/links";
 import { TmuxSessionsRefresher } from "./refreshers/tmux";
@@ -22,8 +22,7 @@ class Orchestrator {
   private global: Refresher[] = [];
   private wingScoped: Refresher[] = [];
   private activeWingId: string | null = null;
-  private prsRefresher: PRBucketsRefresher | null = null;
-  private explicitPRsRefresher: ExplicitPRsRefresher | null = null;
+  private prsRefresher: PRsRefresher | null = null;
   private agentsRefresher: AgentsRefresher | null = null;
   private linksRefresher: LinksRefresher | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
@@ -59,21 +58,18 @@ class Orchestrator {
     for (const r of this.wingScoped) r.stop();
     this.wingScoped = [];
     this.prsRefresher = null;
-    this.explicitPRsRefresher = null;
     this.agentsRefresher = null;
     this.linksRefresher = null;
 
     if (wingId) {
       cacheStore.noteWingActive(wingId);
-      const buckets = new PRBucketsRefresher(wingId);
-      const explicit = new ExplicitPRsRefresher(wingId);
+      const prs = new PRsRefresher(wingId);
       const agents = new AgentsRefresher(wingId);
       const links = new LinksRefresher(wingId);
-      this.prsRefresher = buckets;
-      this.explicitPRsRefresher = explicit;
+      this.prsRefresher = prs;
       this.agentsRefresher = agents;
       this.linksRefresher = links;
-      this.wingScoped.push(buckets, explicit, agents, links);
+      this.wingScoped.push(prs, agents, links);
       for (const r of this.wingScoped) r.start();
     }
   }
@@ -81,21 +77,18 @@ class Orchestrator {
   /** Refresh a single PR by ref — used after writes that change watched or
    *  workspace.prs membership (drag-drop, manual add). */
   async refreshPRKey(repo: string, number: number): Promise<void> {
-    await this.explicitPRsRefresher?.refreshKey(repo, number);
+    await this.prsRefresher?.refreshKey(repo, number);
   }
 
   /** Re-tick the explicit-PRs refresher. Called after watchedPRs.add/remove
    *  or workspace.prs mutations. */
   async refreshExplicit(): Promise<void> {
-    await this.explicitPRsRefresher?.refresh();
+    await this.prsRefresher?.refresh();
   }
 
   /** Re-tick both PR refreshers. Used by the manual PR refresh button. */
   async refreshPRs(): Promise<void> {
-    await Promise.all([
-      this.prsRefresher?.refresh(),
-      this.explicitPRsRefresher?.refresh(),
-    ]);
+    await this.prsRefresher?.refresh();
   }
 
   /** Reconcile agent watchers when workspace data changes (added/removed
@@ -105,7 +98,7 @@ class Orchestrator {
   }
 
   /** Re-tick the link refresher. Called when workspace.links change so newly
-   *  added URLs hydrate without waiting the full TTL. */
+   *  added URLs hydrate through direct connectors. */
   async refreshLinks(): Promise<void> {
     await this.linksRefresher?.refresh();
   }
@@ -132,7 +125,6 @@ class Orchestrator {
     this.global = [];
     this.wingScoped = [];
     this.prsRefresher = null;
-    this.explicitPRsRefresher = null;
   }
 }
 

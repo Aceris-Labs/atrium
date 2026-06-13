@@ -123,13 +123,22 @@ export interface InboxItem {
   groupUrl?: string;
 }
 
+export type ItemStatus =
+  | "todo"
+  | "blocked"
+  | "in-progress"
+  | "in-review"
+  | "monitoring";
+
 /** Unified todo+note. Title is required and shown in the list; body is
- *  optional markdown shown in the detail side-panel. All items are checkable. */
+ *  optional markdown shown in the detail side-panel. Status is separate from
+ *  the checkable done state. */
 export interface Item {
   id: string;
   title: string;
   body?: string;
   done: boolean;
+  status?: ItemStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -210,8 +219,7 @@ export type ConnectorSource =
   | "coda"
   | "figma"
   | "notion"
-  | "github"
-  | "claude";
+  | "github";
 
 export interface NotionConfig {
   apiToken: string;
@@ -248,20 +256,13 @@ export interface FigmaConfig {
 }
 
 /**
- * "mcp"       — local stdio MCP server found in ~/.claude/settings.json or ~/.mcp.json
- * "cloud-mcp" — claude.ai cloud-managed MCP (e.g. Linear, Notion, Slack integrations);
- *               hydrated by spawning `claude -p` and letting it call its cloud tools
  * "api-key"   — direct API call with a stored credential
  * "oauth"     — OAuth token (Linear only)
- * "agent"     — generic claude subprocess fallback (no specific MCP tool)
  * "gh-cli"    — GitHub CLI (`gh`) with its own stored authentication
  */
 export type ConnectorStrategy =
-  | "mcp"
-  | "cloud-mcp"
   | "api-key"
   | "oauth"
-  | "agent"
   | "gh-cli";
 
 export interface StrategyStatus {
@@ -277,7 +278,7 @@ export interface StrategyStatus {
 export interface ConnectorStatus {
   source: ConnectorSource;
   configured: boolean;
-  /** Active strategy in use — determined by priority: mcp > api-key/oauth */
+  /** Active strategy in use — determined by direct connector availability. */
   activeStrategy?: ConnectorStrategy;
   maskedKey?: string;
   publicFields?: Record<string, string>;
@@ -499,8 +500,6 @@ export type WindowApi = {
       config?: unknown,
     ) => Promise<ConnectorTestResult>;
     startOAuth: (source: ConnectorSource) => Promise<ConnectorTestResult>;
-    enableCloudMcp: (source: ConnectorSource) => Promise<void>;
-    disableCloudMcp: (source: ConnectorSource) => Promise<void>;
   };
   cache: {
     snapshot: () => Promise<CacheState>;

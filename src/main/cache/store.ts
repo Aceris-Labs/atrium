@@ -198,11 +198,35 @@ function shallowEqualPR(a: PRStatus, b: PRStatus): boolean {
     a.reviewDecision === b.reviewDecision &&
     a.openComments === b.openComments &&
     a.threadsAwaitingYou === b.threadsAwaitingYou &&
+    sameAwaitingThreads(a.awaitingThreads, b.awaitingThreads) &&
     a.mergeState === b.mergeState &&
     a.autoMerge === b.autoMerge &&
     a.author === b.author &&
     a.repo === b.repo
   );
+}
+
+function sameAwaitingThreads(
+  a: PRStatus["awaitingThreads"],
+  b: PRStatus["awaitingThreads"],
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return !a && !b;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.threadId !== right.threadId ||
+      left.url !== right.url ||
+      left.lastComment.author !== right.lastComment.author ||
+      left.lastComment.body !== right.lastComment.body ||
+      left.lastComment.createdAt !== right.lastComment.createdAt
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function sameTagSet(a: PRTag[], b: PRTag[]): boolean {

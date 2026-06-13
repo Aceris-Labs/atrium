@@ -1,4 +1,16 @@
-import type { Workspace } from "../shared/types";
+import type { ItemStatus, Workspace } from "../shared/types";
+
+const ITEM_STATUS_LABELS: Record<ItemStatus, string> = {
+  todo: "Todo",
+  blocked: "Blocked",
+  "in-progress": "In Progress",
+  "in-review": "In Review",
+  monitoring: "Monitoring",
+};
+
+function itemStatusLabel(status: ItemStatus | undefined): string {
+  return ITEM_STATUS_LABELS[status ?? "todo"];
+}
 
 /** Renders a workspace into the markdown blob we hand off as launch context.
  *  Pure formatter — no IO. The caller passes the data it already has. */
@@ -55,7 +67,7 @@ export function buildWorkspaceContextMarkdown(
     lines.push("## Items");
     for (const item of items) {
       const checkbox = item.done ? "[x]" : "[ ]";
-      lines.push(`- ${checkbox} ${item.title}`);
+      lines.push(`- ${checkbox} [${itemStatusLabel(item.status)}] ${item.title}`);
       if (item.body) {
         for (const bodyLine of item.body.split("\n")) {
           lines.push(`  ${bodyLine}`);

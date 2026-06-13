@@ -40,6 +40,8 @@ import type {
 
 type MainTab = "inbox" | "prs" | "items";
 
+const MIN_REFRESH_FEEDBACK_MS = 500;
+
 export default function App() {
   const toast = useToast();
   const [wings, setWings] = useState<Wing[]>([]);
@@ -535,7 +537,8 @@ export default function App() {
           <button
             className="btn btn-ghost btn-sm ml-auto self-center"
             onClick={() => setShowWingSummary(true)}
-            title="AI summary of this wing's spaces"
+            disabled
+            title="AI summaries are disabled until API-token-backed actions and usage tracking are in place."
           >
             Summarize wing
           </button>
@@ -806,10 +809,15 @@ function PRsPanel({
   const [refreshing, setRefreshing] = useState(false);
   async function handleRefresh() {
     if (refreshing) return;
+    const startedAt = Date.now();
     setRefreshing(true);
     try {
       await onRefreshPRs();
     } finally {
+      const remaining = MIN_REFRESH_FEEDBACK_MS - (Date.now() - startedAt);
+      if (remaining > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remaining));
+      }
       setRefreshing(false);
     }
   }
@@ -821,11 +829,12 @@ function PRsPanel({
           onClick={handleRefresh}
           disabled={refreshing}
           title="Refresh PRs from GitHub"
+          aria-busy={refreshing}
         >
           <ArrowPathIcon
             className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`}
           />
-          Refresh
+          {refreshing ? "Refreshing" : "Refresh"}
         </button>
       </div>
       <PRSection

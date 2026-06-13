@@ -15,11 +15,21 @@ import { listWings, listWorkspaces, updateWorkspace } from "../main/store.js";
 import { buildWorkspaceContextMarkdown } from "../main/context.js";
 import type {
   Item,
+  ItemStatus,
   LinkCategory,
   Wing,
   Workspace,
   WorkspaceLink,
 } from "../shared/types.js";
+
+const itemStatusSchema = z.enum([
+  "todo",
+  "blocked",
+  "in-progress",
+  "in-review",
+  "monitoring",
+]);
+const DEFAULT_ITEM_STATUS: ItemStatus = "todo";
 
 // ── Resolution ─────────────────────────────────────────────────────────────
 
@@ -253,11 +263,12 @@ server.registerTool(
       title: z.string().min(1),
       body: z.string().optional(),
       done: z.boolean().optional(),
+      status: itemStatusSchema.optional(),
       wing_id: z.string().optional(),
       workspace_id: z.string().optional(),
     },
   },
-  async ({ title, body, done, wing_id, workspace_id }) => {
+  async ({ title, body, done, status, wing_id, workspace_id }) => {
     const { wing, workspace } = resolve(wing_id, workspace_id);
     const now = new Date().toISOString();
     const item: Item = {
@@ -267,6 +278,7 @@ server.registerTool(
       title,
       body,
       done: done ?? false,
+      status: status ?? DEFAULT_ITEM_STATUS,
       createdAt: now,
       updatedAt: now,
     };
@@ -317,11 +329,12 @@ server.registerTool(
       item_id: z.string().min(1),
       title: z.string().optional(),
       body: z.string().optional(),
+      status: itemStatusSchema.optional(),
       wing_id: z.string().optional(),
       workspace_id: z.string().optional(),
     },
   },
-  async ({ item_id, title, body, wing_id, workspace_id }) => {
+  async ({ item_id, title, body, status, wing_id, workspace_id }) => {
     const { wing, workspace } = resolve(wing_id, workspace_id);
     const items = workspace.items ?? [];
     const idx = items.findIndex((i) => i.id === item_id);
@@ -330,6 +343,7 @@ server.registerTool(
       ...items[idx],
       title: title ?? items[idx].title,
       body: body !== undefined ? body : items[idx].body,
+      status: status ?? items[idx].status,
       updatedAt: new Date().toISOString(),
     };
     const nextItems = [...items];

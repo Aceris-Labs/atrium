@@ -8,9 +8,32 @@ import {
   Bars3Icon,
 } from "@heroicons/react/20/solid";
 import { Checkbox } from "./Checkbox";
-import type { Item } from "../../../shared/types";
+import type { Item, ItemStatus } from "../../../shared/types";
 
 marked.setOptions({ gfm: true, breaks: true });
+
+const ITEM_STATUS_OPTIONS: ItemStatus[] = [
+  "todo",
+  "blocked",
+  "in-progress",
+  "in-review",
+  "monitoring",
+];
+const DEFAULT_ITEM_STATUS: ItemStatus = "todo";
+const ITEM_STATUS_LABELS: Record<ItemStatus, string> = {
+  todo: "Todo",
+  blocked: "Blocked",
+  "in-progress": "In Progress",
+  "in-review": "In Review",
+  monitoring: "Monitoring",
+};
+const ITEM_STATUS_CLASSES: Record<ItemStatus, string> = {
+  todo: "status-todo",
+  blocked: "status-blocked",
+  "in-progress": "status-in-progress",
+  "in-review": "status-in-review",
+  monitoring: "status-monitoring",
+};
 
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -22,6 +45,72 @@ function formatRelative(iso: string): string {
   const days = Math.floor(hrs / 24);
   if (days < 30) return `${days}d ago`;
   return `${Math.floor(days / 30)}mo ago`;
+}
+
+function findItemDropPoint(
+  containerEl: HTMLElement,
+  clientY: number,
+  itemIds: string[],
+): { id: string; before: boolean } | null {
+  const itemIdSet = new Set(itemIds);
+  const rows = Array.from(
+    containerEl.querySelectorAll<HTMLElement>("[data-item-row-id]"),
+  ).filter((el) => itemIdSet.has(el.dataset.itemRowId ?? ""));
+
+  if (rows.length === 0) return null;
+
+  let nearestIdx = 0;
+  let nearestDist = Infinity;
+  for (let i = 0; i < rows.length; i++) {
+    const rect = rows[i].getBoundingClientRect();
+    const centerY = (rect.top + rect.bottom) / 2;
+    const dist = Math.abs(clientY - centerY);
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearestIdx = i;
+    }
+  }
+
+  const nearest = rows[nearestIdx];
+  const rect = nearest.getBoundingClientRect();
+  const id = nearest.dataset.itemRowId;
+  if (!id) return null;
+
+  return {
+    id,
+    before: clientY < (rect.top + rect.bottom) / 2,
+  };
+}
+
+function getItemStatus(item: Item): ItemStatus {
+  return item.status ?? DEFAULT_ITEM_STATUS;
+}
+
+function ItemStatusSelect({
+  status,
+  onChange,
+  className = "",
+}: {
+  status: ItemStatus;
+  onChange: (status: ItemStatus) => void;
+  className?: string;
+}) {
+  return (
+    <select
+      className={`item-status-select ${ITEM_STATUS_CLASSES[status]} ${className}`}
+      value={status}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onChange={(e) => onChange(e.target.value as ItemStatus)}
+      title="Item status"
+    >
+      {ITEM_STATUS_OPTIONS.map((option) => (
+        <option key={option} value={option}>
+          {ITEM_STATUS_LABELS[option]}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 export interface ItemsTabProps {
@@ -110,6 +199,7 @@ export function ItemsTab({
       id: crypto.randomUUID(),
       title: "",
       done: false,
+      status: DEFAULT_ITEM_STATUS,
       createdAt: now,
       updatedAt: now,
     };
@@ -144,6 +234,15 @@ export function ItemsTab({
     onChange(next);
   }
 
+  function getInsertBeforeId(
+    point: { id: string; before: boolean } | null,
+  ): string | null {
+    if (!point || point.id === draggingId) return null;
+    if (point.before) return point.id;
+    const idx = active.findIndex((i) => i.id === point.id);
+    return active[idx + 1]?.id ?? "__active_end__";
+  }
+
   return (
     <div className="flex h-full gap-5 min-h-0">
       {/* Left: list — full width when no detail open */}
@@ -165,10 +264,35 @@ export function ItemsTab({
 
         <div
           className="flex-1 overflow-y-auto flex flex-col gap-1"
+          onDragOver={(e) => {
+            if (!draggingId) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            const point = findItemDropPoint(
+              e.currentTarget,
+              e.clientY,
+              active.map((i) => i.id),
+            );
+            setInsertBeforeId(getInsertBeforeId(point));
+          }}
           onDragLeave={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) {
               setInsertBeforeId(null);
             }
+          }}
+          onDrop={(e) => {
+            if (!draggingId) return;
+            e.preventDefault();
+            const point = findItemDropPoint(
+              e.currentTarget,
+              e.clientY,
+              active.map((i) => i.id),
+            );
+            if (point && point.id !== draggingId) {
+              handleReorder(draggingId, point.id, point.before);
+            }
+            setDraggingId(null);
+            setInsertBeforeId(null);
           }}
         >
           {active.length === 0 && done.length === 0 && (
@@ -193,6 +317,7 @@ export function ItemsTab({
               onTitleCommit={(title) => handleTitleCommit(item.id, title)}
               onTitleCancel={() => clearTitleDraft(item.id)}
               onToggleDone={() => handleUpdate(item.id, { done: !item.done })}
+              onStatusChange={(status) => handleUpdate(item.id, { status })}
               onToggleExpand={() =>
                 setExpandedId((prev) => (prev === item.id ? null : item.id))
               }
@@ -206,34 +331,12 @@ export function ItemsTab({
                 setInsertBeforeId(null);
                 onItemDragEnd?.();
               }}
-              onDragOver={(e) => {
-                if (!draggingId || draggingId === item.id) return;
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                const before = e.clientY < rect.top + rect.height / 2;
-                setInsertBeforeId(before ? item.id : null);
-                if (!before) {
-                  const idx = active.findIndex((i) => i.id === item.id);
-                  const nextItem = active[idx + 1];
-                  setInsertBeforeId(nextItem?.id ?? "__active_end__");
-                }
-              }}
-              onDrop={(e) => {
-                if (!draggingId) return;
-                e.preventDefault();
-                const target = insertBeforeId ?? item.id;
-                if (target === "__active_end__") {
-                  const lastActive = active[active.length - 1];
-                  if (lastActive)
-                    handleReorder(draggingId, lastActive.id, false);
-                } else {
-                  handleReorder(draggingId, target, true);
-                }
-                setDraggingId(null);
-                setInsertBeforeId(null);
-              }}
             />
           ))}
+
+          {insertBeforeId === "__active_end__" && (
+            <div className="h-0.5 bg-blue rounded-full mx-1" />
+          )}
 
           {done.length > 0 && (
             <button
@@ -264,6 +367,7 @@ export function ItemsTab({
                 onTitleCommit={(title) => handleTitleCommit(item.id, title)}
                 onTitleCancel={() => clearTitleDraft(item.id)}
                 onToggleDone={() => handleUpdate(item.id, { done: !item.done })}
+                onStatusChange={(status) => handleUpdate(item.id, { status })}
                 onToggleExpand={() =>
                   setExpandedId((prev) => (prev === item.id ? null : item.id))
                 }
@@ -285,6 +389,9 @@ export function ItemsTab({
             }
             onTitleCommit={(title) => handleTitleCommit(expanded.id, title)}
             onUpdate={(patch) => handleUpdate(expanded.id, patch)}
+            onStatusChange={(status) =>
+              handleUpdate(expanded.id, { status })
+            }
             onDelete={() => handleDelete(expanded.id)}
             onClose={() => setExpandedId(null)}
           />
@@ -306,12 +413,11 @@ interface ItemRowProps {
   onTitleCommit: (title: string) => void;
   onTitleCancel: () => void;
   onToggleDone: () => void;
+  onStatusChange: (status: ItemStatus) => void;
   onToggleExpand: () => void;
   onDelete: () => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
-  onDragOver?: (e: React.DragEvent) => void;
-  onDrop?: (e: React.DragEvent) => void;
 }
 
 function ItemRow({
@@ -326,12 +432,11 @@ function ItemRow({
   onTitleCommit,
   onTitleCancel,
   onToggleDone,
+  onStatusChange,
   onToggleExpand,
   onDelete,
   onDragStart,
   onDragEnd,
-  onDragOver,
-  onDrop,
 }: ItemRowProps) {
   const draggable = !!onDragStart;
   const [editing, setEditing] = useState(false);
@@ -373,14 +478,15 @@ function ItemRow({
     <>
       {insertLineBefore && <div className="h-0.5 bg-blue rounded-full mx-1" />}
       <div
+        data-item-row-id={item.id}
         draggable={draggable && !editing}
         onDragStart={(e) => {
           e.stopPropagation();
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", item.id);
           onDragStart?.();
         }}
         onDragEnd={onDragEnd}
-        onDragOver={onDragOver}
-        onDrop={onDrop}
         onClick={() => {
           if (!editing) onToggleExpand();
         }}
@@ -396,6 +502,10 @@ function ItemRow({
         <div onClick={(e) => e.stopPropagation()}>
           <Checkbox checked={item.done} onChange={onToggleDone} />
         </div>
+        <ItemStatusSelect
+          status={getItemStatus(item)}
+          onChange={onStatusChange}
+        />
         {editing ? (
           <input
             ref={inputRef}
@@ -468,6 +578,7 @@ interface ItemDetailPanelProps {
   onTitleDraftChange: (title: string) => void;
   onTitleCommit: (title: string) => void;
   onUpdate: (patch: Partial<Item>) => void;
+  onStatusChange: (status: ItemStatus) => void;
   onDelete: () => void;
   onClose: () => void;
 }
@@ -478,6 +589,7 @@ function ItemDetailPanel({
   onTitleDraftChange,
   onTitleCommit,
   onUpdate,
+  onStatusChange,
   onDelete,
   onClose,
 }: ItemDetailPanelProps) {
@@ -499,12 +611,34 @@ function ItemDetailPanel({
     setEditingBody(false);
   }
 
+  function startEditingBody() {
+    setEditingBody(true);
+    setTimeout(() => bodyRef.current?.focus(), 0);
+  }
+
+  function handleBodyClick(e: React.MouseEvent<HTMLDivElement>) {
+    const target = e.target instanceof Element ? e.target : null;
+    const anchor = target?.closest<HTMLAnchorElement>("a[href]");
+    if (anchor && e.currentTarget.contains(anchor)) {
+      e.preventDefault();
+      void window.api.shell.openExternal(anchor.href);
+      return;
+    }
+
+    startEditingBody();
+  }
+
   return (
     <div className="h-full flex flex-col bg-bg-card border border-line rounded-md overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-line">
         <Checkbox
           checked={item.done}
           onChange={() => onUpdate({ done: !item.done })}
+        />
+        <ItemStatusSelect
+          status={getItemStatus(item)}
+          onChange={onStatusChange}
+          className="max-w-[150px]"
         />
         <input
           className={`flex-1 bg-transparent border-none outline-none text-base font-semibold ${item.done ? "line-through text-fg-muted" : "text-fg"}`}
@@ -563,7 +697,10 @@ function ItemDetailPanel({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5">
+      <div
+        className={`flex-1 overflow-y-auto p-5 ${editingBody ? "" : "cursor-pointer"}`}
+        onClick={editingBody ? undefined : handleBodyClick}
+      >
         {editingBody ? (
           <textarea
             ref={bodyRef}
@@ -587,11 +724,7 @@ function ItemDetailPanel({
           />
         ) : item.body ? (
           <div
-            className="prose-note text-sm text-fg leading-relaxed cursor-text"
-            onClick={() => {
-              setEditingBody(true);
-              setTimeout(() => bodyRef.current?.focus(), 0);
-            }}
+            className="prose-note text-sm text-fg leading-relaxed"
             dangerouslySetInnerHTML={{
               __html: marked.parse(item.body) as string,
             }}
@@ -599,10 +732,6 @@ function ItemDetailPanel({
         ) : (
           <button
             className="text-sm text-fg-muted italic hover:text-fg"
-            onClick={() => {
-              setEditingBody(true);
-              setTimeout(() => bodyRef.current?.focus(), 0);
-            }}
           >
             + Add notes…
           </button>

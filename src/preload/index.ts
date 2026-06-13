@@ -157,10 +157,6 @@ const api: WindowApi = {
       ipcRenderer.invoke("connectors:test", source, config),
     startOAuth: (source: ConnectorSource) =>
       ipcRenderer.invoke("connectors:oauth", source),
-    enableCloudMcp: (source: ConnectorSource) =>
-      ipcRenderer.invoke("connectors:cloud-mcp:enable", source),
-    disableCloudMcp: (source: ConnectorSource) =>
-      ipcRenderer.invoke("connectors:cloud-mcp:disable", source),
   },
   cache: {
     snapshot: () => ipcRenderer.invoke("cache:snapshot"),

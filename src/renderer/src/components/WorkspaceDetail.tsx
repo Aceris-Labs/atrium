@@ -38,6 +38,9 @@ import type {
 
 type Tab = "overview" | "items" | "links" | "settings";
 
+const AI_ACTIONS_DISABLED_MESSAGE =
+  "AI actions are disabled until they use an explicit API-token-backed client with usage tracking.";
+
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
@@ -1278,16 +1281,13 @@ export function WorkspaceDetail({
                   <button
                     className="btn btn-ghost btn-sm flex items-center gap-1.5"
                     onClick={handleGenerateDigest}
-                    disabled={generatingDigest}
+                    disabled
+                    title={AI_ACTIONS_DISABLED_MESSAGE}
                   >
                     <ArrowPathIcon
                       className={`w-3.5 h-3.5 ${generatingDigest ? "animate-spin" : ""}`}
                     />
-                    {generatingDigest
-                      ? "Generating…"
-                      : workspace.digest
-                        ? "Regenerate"
-                        : "Generate"}
+                    Unavailable
                   </button>
                 </div>
                 {generatingDigest ? (
@@ -1306,8 +1306,8 @@ export function WorkspaceDetail({
                   />
                 ) : (
                   <p className="detail-empty-text">
-                    Click Generate to have Claude summarize this space's PRs,
-                    items, and links.
+                    AI digest is disabled until API-token-backed actions and
+                    usage tracking are in place.
                   </p>
                 )}
               </div>

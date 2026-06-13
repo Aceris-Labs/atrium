@@ -52,8 +52,6 @@ import {
   removeConnectorConfig,
   setConnectorConfig,
   testConnector,
-  enableCloudMcp,
-  disableCloudMcp,
 } from "./connectors/registry";
 import { startLinearOAuth } from "./oauth/linear";
 import { cacheStore, orchestrator } from "./cache";
@@ -347,12 +345,6 @@ export function registerIpcHandlers(): void {
     "connectors:test",
     (_, source: ConnectorSource, config?: unknown) =>
       testConnector(source, config),
-  );
-  safeHandle("connectors:cloud-mcp:enable", (_, source: ConnectorSource) =>
-    enableCloudMcp(source),
-  );
-  safeHandle("connectors:cloud-mcp:disable", (_, source: ConnectorSource) =>
-    disableCloudMcp(source),
   );
   safeHandle("connectors:oauth", async (_, source: ConnectorSource) => {
     if (source !== "linear") {

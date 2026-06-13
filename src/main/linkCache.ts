@@ -6,7 +6,6 @@ import type { LinkStatus } from "../shared/types";
 
 const DIR = join(homedir(), ".atrium");
 const CACHE_FILE = join(DIR, "link-cache.json");
-const TTL_MS = 5 * 60 * 1000;
 
 // Load once at startup synchronously — acceptable for a one-time cold read.
 let cache: Record<string, LinkStatus> = load();
@@ -36,12 +35,6 @@ function schedulePersist(): void {
 
 export function getCached(url: string): LinkStatus | undefined {
   return cache[url];
-}
-
-export function isFresh(status: LinkStatus | undefined): boolean {
-  if (!status) return false;
-  const age = Date.now() - new Date(status.fetchedAt).getTime();
-  return age < TTL_MS;
 }
 
 // Only persist outcomes that are stable. Transient errors

@@ -1,22 +1,42 @@
-import { TTLRefresher } from "../refresher";
+import type { Refresher } from "../refresher";
 import { cacheStore } from "../store";
 import { listWorkspaces } from "../../store";
-import { getCached, isFresh, setCached } from "../../linkCache";
+import { getCached, setCached } from "../../linkCache";
 import { hydrateOne } from "../../connectors/registry";
 import type { LinkStatus } from "../../../shared/types";
-
-const LINKS_TTL_MS = 5 * 60_000;
 
 /** Hydrates the union of every URL referenced by any workspace.links entry in
  *  the active wing. Deduped across workspaces — a URL linked from three spaces
  *  is fetched once. The on-disk linkCache survives restarts; in-memory state
- *  also lives in the renderer-mirrored cache. */
-export class LinksRefresher extends TTLRefresher {
-  constructor(private wingId: string) {
-    super(LINKS_TTL_MS);
+ *  also lives in the renderer-mirrored cache. Link hydration is direct only:
+ *  API/OAuth/CLI connectors, never MCP or Claude. */
+export class LinksRefresher implements Refresher {
+  private inFlight = false;
+  private stopped = false;
+
+  constructor(private wingId: string) {}
+
+  start(): void {
+    void this.refresh();
   }
 
-  protected async tick(): Promise<void> {
+  stop(): void {
+    this.stopped = true;
+  }
+
+  async refresh(): Promise<void> {
+    if (this.inFlight || this.stopped) return;
+    this.inFlight = true;
+    try {
+      await this.hydrateMissing();
+    } catch (err) {
+      console.error(`[LinksRefresher] refresh failed:`, err);
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
+  private async hydrateMissing(): Promise<void> {
     const urls = collectUrls(this.wingId);
     if (urls.size === 0) return;
 
@@ -27,14 +47,14 @@ export class LinksRefresher extends TTLRefresher {
       if (cached) cacheStore.setLink(url, cached);
     }
 
-    const stale: string[] = [];
+    const missing: string[] = [];
     for (const url of urls) {
-      if (!isFresh(getCached(url))) stale.push(url);
+      if (!getCached(url)) missing.push(url);
     }
-    if (stale.length === 0) return;
+    if (missing.length === 0) return;
 
     const settled = await Promise.allSettled(
-      stale.map(async (url) => [url, await hydrateOne(url)] as const),
+      missing.map(async (url) => [url, await hydrateOne(url)] as const),
     );
     for (const s of settled) {
       if (s.status !== "fulfilled") continue;

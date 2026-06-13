@@ -4,177 +4,219 @@ import { readdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { getConfig, getWingProjectDir } from "./store";
-import type { PRStatus, RepoInfo, AwaitingReplyThread } from "../shared/types";
+import type { PRBroadCheck, PRDecisionCheck } from "./prCache";
+import { prKey } from "../shared/cacheTypes";
+import type { PRStatus, RepoInfo } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
 
-const PR_FIELDS_LITE = `
+const PR_FIELDS_BROAD_CHECK = `
   ... on PullRequest {
+    id
     number
     title
     url
+    updatedAt
     state
     isDraft
+    headRefOid
+    repository { nameWithOwner }
+    author { login }
+  }
+`;
+
+const PR_FIELDS_DECISION_CHECK = `
+  ... on PullRequest {
+    id
+    number
+    reviewDecision
+    mergeStateStatus
+    autoMergeRequest { enabledAt }
+    repository { nameWithOwner }
+    commits(last: 1) {
+      nodes { commit { oid statusCheckRollup { state } } }
+    }
+  }
+`;
+
+const PR_FIELDS_DETAIL = `
+  ... on PullRequest {
+    id
+    number
+    title
+    url
+    updatedAt
+    state
+    isDraft
+    headRefOid
     reviewDecision
     mergeStateStatus
     autoMergeRequest { enabledAt }
     repository { nameWithOwner }
     author { login }
     commits(last: 1) {
-      nodes { commit { statusCheckRollup { state } } }
+      nodes { commit { oid statusCheckRollup { state } } }
     }
   }
 `;
 
-const PR_FIELDS_THREADS = `
-  ... on PullRequest {
-    number
-    repository { nameWithOwner }
-    title
-    url
-    reviewThreads(first: 10) {
-      totalCount
-      nodes {
-        id
-        isResolved
-        path
-        line
-        comments(last: 1) {
-          nodes {
-            author { login }
-            body
-            createdAt
-            url
-          }
-        }
-      }
-    }
-  }
-`;
-
-export interface AllPRs {
-  authored: PRStatus[];
-  reviewRequested: PRStatus[];
-  reviewed: PRStatus[];
+export interface PRUniverseCheck {
+  checks: Record<string, PRBroadCheck>;
+  buckets: {
+    mine: string[];
+    review: string[];
+  };
+  rateLimit?: {
+    cost: number;
+    remaining: number;
+    resetAt: string;
+  };
 }
 
-/** Per-PR review-thread enrichment, keyed by `${repo}-${number}`. Fetched in
- *  a separate GraphQL roundtrip so card-level data can render without waiting
- *  on the heavier review-threads payload. */
-export type ReviewThreadInfo = {
-  openComments: number;
-  threadsAwaitingYou: number;
-  awaitingThreads: AwaitingReplyThread[];
-};
+export interface PRHydration {
+  pr: PRStatus;
+  broad: PRBroadCheck;
+  decision: PRDecisionCheck;
+}
 
-/** Fetches authored / review-requested / reviewed PRs (card-level fields only,
- *  no review threads). Pair with `listPRReviewThreads` for the inbox/badges. */
-export async function listAllPRs(wingId: string): Promise<AllPRs> {
-  const empty: AllPRs = { authored: [], reviewRequested: [], reviewed: [] };
+/** One thin discovery/check pass for the active PR universe. Search buckets
+ *  discover authored/review-requested PRs; explicit refs cover watched and
+ *  workspace-linked PRs. Returns signatures only — callers decide which PRs
+ *  need detail hydration from the local cache state. */
+export async function checkPRUniverse(
+  wingId: string,
+  explicitRefs: ReadonlyArray<{ repo: string; number: number }>,
+): Promise<PRUniverseCheck | null> {
   const scope = await wingRepoScope(wingId);
-  if (scope === null) return empty;
+  const includeSearchBuckets = scope !== null;
+  if (!includeSearchBuckets && explicitRefs.length === 0) {
+    return { checks: {}, buckets: { mine: [], review: [] } };
+  }
 
   const since = isoDateNDaysAgo(90);
-  const authoredQ = `is:pr author:@me updated:>=${since} sort:updated-desc${scope}`;
-  const reviewRequestedQ = `is:pr review-requested:@me updated:>=${since} sort:updated-desc${scope}`;
-  const reviewedQ = `is:pr reviewed-by:@me -author:@me updated:>=${since} sort:updated-desc${scope}`;
+  const searchScope = scope ?? "";
+  const authoredQ = `is:pr author:@me updated:>=${since} sort:updated-desc${searchScope}`;
+  const reviewRequestedQ = `is:pr review-requested:@me updated:>=${since} sort:updated-desc${searchScope}`;
+  const workChunks = chunkRefs(explicitRefs, 50);
+  if (workChunks.length === 0) workChunks.push([]);
 
-  const query = `
-    query {
-      authored: search(query: "${authoredQ}", type: ISSUE, first: 30) {
-        edges { node { ${PR_FIELDS_LITE} } }
-      }
-      reviewRequested: search(query: "${reviewRequestedQ}", type: ISSUE, first: 30) {
-        edges { node { ${PR_FIELDS_LITE} } }
-      }
-      reviewed: search(query: "${reviewedQ}", type: ISSUE, first: 30) {
-        edges { node { ${PR_FIELDS_LITE} } }
-      }
-    }
-  `;
+  const checks: Record<string, PRBroadCheck> = {};
+  const buckets = { mine: [] as string[], review: [] as string[] };
+  let rateLimit: PRUniverseCheck["rateLimit"];
 
   const { ghPath } = getConfig();
   try {
-    const { stdout } = await execFileAsync(ghPath, [
-      "api",
-      "graphql",
-      "-f",
-      `query=${query}`,
-    ]);
-    const data = JSON.parse(stdout);
-    if (data.errors) {
-      console.error("[github] GraphQL errors:", data.errors);
+    for (let chunkIndex = 0; chunkIndex < workChunks.length; chunkIndex++) {
+      const refs = workChunks[chunkIndex];
+      const includeBuckets = includeSearchBuckets && chunkIndex === 0;
+      const aliasParts = refs.map((r, i) => {
+        const [owner, name] = r.repo.split("/", 2);
+        return `p${i}: repository(owner: ${gqlString(owner)}, name: ${gqlString(name)}) {
+          pullRequest(number: ${r.number}) { ${PR_FIELDS_BROAD_CHECK} }
+        }`;
+      });
+
+      const bucketParts = includeBuckets
+        ? `
+          authored: search(query: ${gqlString(authoredQ)}, type: ISSUE, first: 30) {
+            edges { node { ${PR_FIELDS_BROAD_CHECK} } }
+          }
+          reviewRequested: search(query: ${gqlString(reviewRequestedQ)}, type: ISSUE, first: 30) {
+            edges { node { ${PR_FIELDS_BROAD_CHECK} } }
+          }
+        `
+        : "";
+      const query = `query {
+        ${bucketParts}
+        ${aliasParts.join("\n")}
+        rateLimit { cost remaining resetAt }
+      }`;
+
+      const { stdout } = await execFileAsync(ghPath, [
+        "api",
+        "graphql",
+        "-f",
+        `query=${query}`,
+      ]);
+      const data = JSON.parse(stdout);
+      if (data.errors) {
+        console.error("[github] checkPRUniverse errors:", data.errors);
+      }
+      rateLimit = data.data?.rateLimit ?? rateLimit;
+
+      if (includeBuckets) {
+        const extractBucket = (key: string): string[] =>
+          (data.data?.[key]?.edges ?? [])
+            .map((e: any) => mapNodeBroadCheck(e.node))
+            .filter(
+              (n: PRBroadCheck | null): n is PRBroadCheck => n !== null,
+            )
+            .map((check: PRBroadCheck) => {
+              checks[check.key] = check;
+              return check.key;
+            });
+        buckets.mine = extractBucket("authored");
+        buckets.review = extractBucket("reviewRequested");
+      }
+
+      refs.forEach((_, i) => {
+        const check = mapNodeBroadCheck(data.data?.[`p${i}`]?.pullRequest);
+        if (check) checks[check.key] = check;
+      });
     }
-    const extract = (key: string): PRStatus[] =>
-      (data.data?.[key]?.edges ?? [])
-        .map((e: any) => e.node)
-        .filter((n: any) => n?.number != null)
-        .map((n: any) => mapNodeLite(n));
-    return {
-      authored: extract("authored"),
-      reviewRequested: extract("reviewRequested"),
-      reviewed: extract("reviewed"),
-    };
+
+    return { checks, buckets, rateLimit };
   } catch (err) {
-    console.error("[github] listAllPRs failed:", err);
-    return empty;
+    console.error("[github] checkPRUniverse failed:", err);
+    return null;
   }
 }
 
-/** Returns review-thread enrichment for the same PRs `listAllPRs` returns. */
-export async function listPRReviewThreads(
-  wingId: string,
-): Promise<Record<string, ReviewThreadInfo>> {
-  const scope = await wingRepoScope(wingId);
-  if (scope === null) return {};
+/** Expensive-but-important decision fields for hot/open PRs only. */
+export async function checkPRDecisions(
+  refs: ReadonlyArray<{ repo: string; number: number }>,
+): Promise<Record<string, PRDecisionCheck> | null> {
+  if (refs.length === 0) return {};
 
-  const authoredQ = `is:pr is:open author:@me${scope}`;
-  const reviewRequestedQ = `is:pr is:open review-requested:@me${scope}`;
-  const reviewedQ = `is:pr is:open reviewed-by:@me -author:@me${scope}`;
-  // listPRReviewThreads stays open-only — threads only matter for active PRs.
-
-  const query = `
-    query {
-      viewer { login }
-      authored: search(query: "${authoredQ}", type: ISSUE, first: 30) {
-        edges { node { ${PR_FIELDS_THREADS} } }
-      }
-      reviewRequested: search(query: "${reviewRequestedQ}", type: ISSUE, first: 30) {
-        edges { node { ${PR_FIELDS_THREADS} } }
-      }
-      reviewed: search(query: "${reviewedQ}", type: ISSUE, first: 30) {
-        edges { node { ${PR_FIELDS_THREADS} } }
-      }
-    }
-  `;
-
+  const checks: Record<string, PRDecisionCheck> = {};
+  const chunks = chunkRefs(refs, 25);
   const { ghPath } = getConfig();
+
   try {
-    const { stdout } = await execFileAsync(ghPath, [
-      "api",
-      "graphql",
-      "-f",
-      `query=${query}`,
-    ]);
-    const data = JSON.parse(stdout);
-    if (data.errors) {
-      console.error("[github] GraphQL errors:", data.errors);
-    }
-    const viewerLogin: string | null = data.data?.viewer?.login ?? null;
-    const out: Record<string, ReviewThreadInfo> = {};
-    for (const key of ["authored", "reviewRequested", "reviewed"]) {
-      for (const edge of data.data?.[key]?.edges ?? []) {
-        const node = edge.node;
-        if (!node || node.number == null) continue;
-        const repo = node.repository?.nameWithOwner ?? "";
-        out[`${repo}-${node.number}`] = mapReviewThreads(node, viewerLogin);
+    for (const chunk of chunks) {
+      const aliasParts = chunk.map((r, i) => {
+        const [owner, name] = r.repo.split("/", 2);
+        return `p${i}: repository(owner: ${gqlString(owner)}, name: ${gqlString(name)}) {
+          pullRequest(number: ${r.number}) { ${PR_FIELDS_DECISION_CHECK} }
+        }`;
+      });
+      const query = `query {
+        ${aliasParts.join("\n")}
+        rateLimit { cost remaining resetAt }
+      }`;
+
+      const { stdout } = await execFileAsync(ghPath, [
+        "api",
+        "graphql",
+        "-f",
+        `query=${query}`,
+      ]);
+      const data = JSON.parse(stdout);
+      if (data.errors) {
+        console.error("[github] checkPRDecisions errors:", data.errors);
       }
+
+      chunk.forEach((_, i) => {
+        const check = mapNodeDecisionCheck(data.data?.[`p${i}`]?.pullRequest);
+        if (check) checks[check.key] = check;
+      });
     }
-    return out;
+
+    return checks;
   } catch (err) {
-    console.error("[github] listPRReviewThreads failed:", err);
-    return {};
+    console.error("[github] checkPRDecisions failed:", err);
+    return null;
   }
 }
 
@@ -246,6 +288,18 @@ function parseGitRemote(url: string): string | null {
   return match ? match[1] : null;
 }
 
+function gqlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function chunkRefs<T>(items: ReadonlyArray<T>, size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
 export async function getDefaultRepo(wingId: string): Promise<string | null> {
   const rootDir = getWingProjectDir(wingId);
   if (!rootDir) return null;
@@ -253,24 +307,21 @@ export async function getDefaultRepo(wingId: string): Promise<string | null> {
   return repos.length > 0 ? repos[0].repo : null;
 }
 
-/** Batched lookup of explicit `(repo, number)` refs via a single graphql call.
- *  Replaces N parallel `gh pr view` subprocess spawns with one graphql query
- *  using aliased `repository().pullRequest()` selections. Returns a map keyed
- *  by `${repo}-${number}` so callers can apply tags / merge with bucket data. */
-export async function fetchExplicitPRs(
-  refs: ReadonlyArray<{ repo: string; number: number }>,
-): Promise<Record<string, PRStatus>> {
-  if (refs.length === 0) return {};
+export async function hydratePR(
+  repo: string,
+  number: number,
+): Promise<PRHydration | null> {
+  const [owner, name] = repo.split("/", 2);
+  if (!owner || !name) return null;
 
-  const aliasFor = (i: number) => `p${i}`;
-  const aliasParts = refs.map((r, i) => {
-    const [owner, name] = r.repo.split("/", 2);
-    return `${aliasFor(i)}: repository(owner: "${owner}", name: "${name}") {
-      pullRequest(number: ${r.number}) { ${PR_FIELDS_LITE} }
-    }`;
-  });
+  const query = `
+    query {
+      repository(owner: ${gqlString(owner)}, name: ${gqlString(name)}) {
+        pullRequest(number: ${number}) { ${PR_FIELDS_DETAIL} }
+      }
+    }
+  `;
 
-  const query = `query { ${aliasParts.join("\n")} }`;
   const { ghPath } = getConfig();
   try {
     const { stdout } = await execFileAsync(ghPath, [
@@ -281,18 +332,22 @@ export async function fetchExplicitPRs(
     ]);
     const data = JSON.parse(stdout);
     if (data.errors) {
-      console.error("[github] fetchExplicitPRs errors:", data.errors);
+      console.error("[github] hydratePR errors:", data.errors);
     }
-    const out: Record<string, PRStatus> = {};
-    refs.forEach((r, i) => {
-      const node = data.data?.[aliasFor(i)]?.pullRequest;
-      if (node?.number == null) return;
-      out[`${r.repo}-${r.number}`] = mapNodeLite(node);
-    });
-    return out;
+    const node = data.data?.repository?.pullRequest;
+    if (!node?.number) return null;
+    const broad = mapNodeBroadCheck(node);
+    const decision = mapNodeDecisionCheck(node);
+    if (!broad || !decision) return null;
+
+    return {
+      pr: mapNodeLite(node),
+      broad,
+      decision,
+    };
   } catch (err) {
-    console.error("[github] fetchExplicitPRs failed:", err);
-    return {};
+    console.error("[github] hydratePR failed:", err);
+    return null;
   }
 }
 
@@ -362,47 +417,58 @@ function mapNodeLite(node: any): PRStatus {
   };
 }
 
-function mapReviewThreads(
-  node: any,
-  viewerLogin: string | null,
-): ReviewThreadInfo {
-  const threads = node.reviewThreads?.nodes ?? [];
-  const unresolvedThreads = threads.filter((t: any) => !t.isResolved);
+function mapNodeBroadCheck(node: any): PRBroadCheck | null {
+  if (!node || node.number == null) return null;
   const repo = node.repository?.nameWithOwner ?? "";
-  const awaitingThreads: AwaitingReplyThread[] = viewerLogin
-    ? unresolvedThreads
-        .map((t: any): AwaitingReplyThread | null => {
-          const last = t.comments?.nodes?.[0];
-          const lastAuthor = last?.author?.login;
-          if (!lastAuthor || lastAuthor === viewerLogin) return null;
-          return {
-            threadId: t.id,
-            pr: {
-              number: node.number,
-              title: node.title,
-              url: node.url,
-              repo,
-            },
-            path: t.path ?? undefined,
-            line: t.line ?? null,
-            url: last.url ?? node.url,
-            lastComment: {
-              author: lastAuthor,
-              body: last.body ?? "",
-              createdAt: last.createdAt ?? "",
-            },
-          };
-        })
-        .filter((t: AwaitingReplyThread | null): t is AwaitingReplyThread =>
-          Boolean(t),
-        )
-    : [];
-
+  if (!repo) return null;
+  const state = (node.state ?? "OPEN").toLowerCase() as PRStatus["state"];
   return {
-    openComments: unresolvedThreads.length,
-    threadsAwaitingYou: awaitingThreads.length,
-    awaitingThreads,
+    key: prKey(repo, node.number),
+    repo,
+    number: node.number,
+    githubId: node.id ?? undefined,
+    updatedAt: node.updatedAt ?? undefined,
+    state,
+    pr: mapNodeLite(node),
+    broadSignature: broadSignatureForNode(node),
   };
+}
+
+function mapNodeDecisionCheck(node: any): PRDecisionCheck | null {
+  if (!node || node.number == null) return null;
+  const repo = node.repository?.nameWithOwner ?? "";
+  if (!repo) return null;
+  return {
+    key: prKey(repo, node.number),
+    repo,
+    number: node.number,
+    githubId: node.id ?? undefined,
+    updatedAt: node.updatedAt ?? undefined,
+    decisionSignature: decisionSignatureForNode(node),
+  };
+}
+
+function broadSignatureForNode(node: any): string {
+  return [
+    node.id ?? "",
+    node.updatedAt ?? "",
+    node.state ?? "",
+    node.isDraft ? "draft" : "ready",
+    node.headRefOid ?? "",
+  ].join("|");
+}
+
+function decisionSignatureForNode(node: any): string {
+  const commit = node.commits?.nodes?.[0]?.commit;
+  const ciState = commit?.statusCheckRollup?.state ?? "";
+  return [
+    node.id ?? "",
+    node.reviewDecision ?? "",
+    node.mergeStateStatus ?? "",
+    node.autoMergeRequest?.enabledAt ?? "",
+    commit?.oid ?? "",
+    ciState,
+  ].join("|");
 }
 
 function deriveCIFromChecks(checks: any[]): PRStatus["ciStatus"] {
