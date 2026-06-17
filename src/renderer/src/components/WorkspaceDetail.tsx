@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { marked } from "marked";
 import {
   PlayIcon,
   StopIcon,
@@ -13,6 +12,7 @@ import {
 import { PRCard, PRCardSkeleton } from "./PRCard";
 import { LinkCard } from "./LinkCard";
 import { ItemsTab } from "./ItemsTab";
+import { SafeMarkdown } from "./SafeMarkdown";
 import { CreateWorktreeModal } from "./CreateWorktreeModal";
 import { LauncherPicker } from "./LauncherPicker";
 import {
@@ -1298,12 +1298,9 @@ export function WorkspaceDetail({
                     <span className="shimmer-bar w-3/5 block" />
                   </div>
                 ) : workspace.digest?.text ? (
-                  <div
-                    className="prose-note text-sm text-fg leading-relaxed rounded-md border border-line bg-bg-input px-4 py-3"
-                    dangerouslySetInnerHTML={{
-                      __html: marked.parse(workspace.digest.text) as string,
-                    }}
-                  />
+                  <SafeMarkdown className="prose-note text-sm text-fg leading-relaxed rounded-md border border-line bg-bg-input px-4 py-3">
+                    {workspace.digest.text}
+                  </SafeMarkdown>
                 ) : (
                   <p className="detail-empty-text">
                     AI digest is disabled until API-token-backed actions and

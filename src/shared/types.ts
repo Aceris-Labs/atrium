@@ -459,7 +459,7 @@ export type WindowApi = {
     ) => Promise<{ number: number; repo: string }[]>;
     remove: (
       wingId: string,
-      num: number,
+      pr: { number: number; repo: string },
     ) => Promise<{ number: number; repo: string }[]>;
   };
   config: {

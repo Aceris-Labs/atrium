@@ -77,6 +77,26 @@ function newWingId(name: string): string {
   return `${base}-${i}`;
 }
 
+function workspaceSlug(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9-]/g, "")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "space"
+  );
+}
+
+function newWorkspaceId(existing: Workspace[], title: string): string {
+  const base = workspaceSlug(title);
+  const ids = new Set(existing.map((w) => w.id));
+  if (!ids.has(base)) return base;
+  let i = 2;
+  while (ids.has(`${base}-${i}`)) i++;
+  return `${base}-${i}`;
+}
+
 function listWingDirs(): string[] {
   if (!existsSync(WINGS_DIR)) return [];
   return readdirSync(WINGS_DIR, { withFileTypes: true })
@@ -240,10 +260,7 @@ export async function createWorkspace(
   const now = new Date().toISOString();
   const workspace: Workspace = {
     ...data,
-    id: data.title
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9-]/g, ""),
+    id: newWorkspaceId(workspaces, data.title),
     items: data.items ?? [],
     createdAt: now,
     updatedAt: now,
@@ -377,9 +394,11 @@ export async function addWatchedPR(
 
 export async function removeWatchedPR(
   wingId: string,
-  num: number,
+  pr: WatchedPR,
 ): Promise<WatchedPR[]> {
-  const list = listWatchedPRs(wingId).filter((p) => p.number !== num);
+  const list = listWatchedPRs(wingId).filter(
+    (p) => !(p.number === pr.number && p.repo === pr.repo),
+  );
   ensureDir(wingDir(wingId));
   await writeJson(watchedFile(wingId), list);
   return list;

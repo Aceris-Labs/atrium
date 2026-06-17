@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { marked } from "marked";
 import {
   PlusIcon,
   TrashIcon,
@@ -8,9 +7,8 @@ import {
   Bars3Icon,
 } from "@heroicons/react/20/solid";
 import { Checkbox } from "./Checkbox";
+import { SafeMarkdown } from "./SafeMarkdown";
 import type { Item, ItemStatus } from "../../../shared/types";
-
-marked.setOptions({ gfm: true, breaks: true });
 
 const ITEM_STATUS_OPTIONS: ItemStatus[] = [
   "todo",
@@ -616,15 +614,7 @@ function ItemDetailPanel({
     setTimeout(() => bodyRef.current?.focus(), 0);
   }
 
-  function handleBodyClick(e: React.MouseEvent<HTMLDivElement>) {
-    const target = e.target instanceof Element ? e.target : null;
-    const anchor = target?.closest<HTMLAnchorElement>("a[href]");
-    if (anchor && e.currentTarget.contains(anchor)) {
-      e.preventDefault();
-      void window.api.shell.openExternal(anchor.href);
-      return;
-    }
-
+  function handleBodyClick() {
     startEditingBody();
   }
 
@@ -723,12 +713,9 @@ function ItemDetailPanel({
             autoFocus
           />
         ) : item.body ? (
-          <div
-            className="prose-note text-sm text-fg leading-relaxed"
-            dangerouslySetInnerHTML={{
-              __html: marked.parse(item.body) as string,
-            }}
-          />
+          <SafeMarkdown className="prose-note text-sm text-fg leading-relaxed">
+            {item.body}
+          </SafeMarkdown>
         ) : (
           <button
             className="text-sm text-fg-muted italic hover:text-fg"

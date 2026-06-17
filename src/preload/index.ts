@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, shell } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 import type {
   Workspace,
   Wing,
@@ -87,7 +87,8 @@ const api: WindowApi = {
       ipcRenderer.invoke("wing:summarize", wingId, workspaceIds),
   },
   shell: {
-    openExternal: (url: string) => shell.openExternal(url),
+    openExternal: (url: string) =>
+      ipcRenderer.invoke("shell:openExternal", url),
   },
   events: {
     onDataChanged: (handler: () => void) => {
@@ -114,8 +115,8 @@ const api: WindowApi = {
     list: (wingId: string) => ipcRenderer.invoke("watchedPRs:list", wingId),
     add: (wingId: string, pr: { number: number; repo: string }) =>
       ipcRenderer.invoke("watchedPRs:add", wingId, pr),
-    remove: (wingId: string, num: number) =>
-      ipcRenderer.invoke("watchedPRs:remove", wingId, num),
+    remove: (wingId: string, pr: { number: number; repo: string }) =>
+      ipcRenderer.invoke("watchedPRs:remove", wingId, pr),
   },
   config: {
     get: () => ipcRenderer.invoke("config:get"),

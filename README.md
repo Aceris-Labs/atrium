@@ -80,7 +80,9 @@ The goal: one click to go from the dashboard to a ready-to-work environment, wit
 
 Atrium integrates with Claude in two ways.
 
-**Generative summaries.** You can generate a digest for any Space: a short summary covering what's being worked on, current state, and blockers: synthesized from the Space's PRs, notes, todos, and links. Wing-level summaries aggregate across all active Spaces, structured as Overview, By Space, Blockers, and Next Steps. When connectors are configured, Claude can pull full ticket and doc bodies via MCP to produce richer summaries.
+**Launch context.** Launching a Space starts Claude Code with a markdown context file that includes the Space's About, latest recap, linked PRs, items, and links. Atrium also ships an MCP server so supported agents can read and update the current Space directly.
+
+**Generative summaries.** AI-generated Space digests and Wing summaries are currently disabled until they use an explicit API-token-backed client with usage tracking. Previously generated digests can still be displayed if they exist in local data.
 
 **Session monitoring.** Atrium watches each Space's Claude Code session log and surfaces a live status badge directly on the Space card: `working`, `needs-input` (awaiting a tool-use permission), `idle`, or `no-session`. You can see at a glance which agents are running, which are stuck waiting for you, and which are finished: without switching into each terminal. The Space detail also shows Claude's latest session recap (the `away_summary` Claude writes when it finishes a working session), which can be promoted directly to the Space's About field.
 

@@ -183,9 +183,9 @@ export default function App() {
     return null;
   }
 
-  async function handleRemoveWatched(num: number) {
+  async function handleRemoveWatched(pr: WorkspacePR) {
     if (!activeWingId) return;
-    await window.api.watchedPRs.remove(activeWingId, num);
+    await window.api.watchedPRs.remove(activeWingId, pr);
   }
 
   // ── Initial bootstrap ────────────────────────────────────────────────────
@@ -786,7 +786,7 @@ interface PRsPanelProps {
   draggingPR: PRStatus | null;
   setDraggingPR: (pr: PRStatus | null) => void;
   onWatchClick: () => void;
-  onRemoveWatched: (num: number) => void;
+  onRemoveWatched: (pr: WorkspacePR) => void;
   onRefreshPRs: () => Promise<void>;
   prKey: (pr: PRStatus) => string;
   spaceTitleFor: (pr: PRStatus) => string | undefined;
@@ -895,7 +895,11 @@ function PRsPanel({
             />
             <button
               className="detail-pr-remove-overlay"
-              onClick={() => onRemoveWatched(pr.number)}
+              onClick={() => {
+                if (pr.repo) {
+                  onRemoveWatched({ repo: pr.repo, number: pr.number });
+                }
+              }}
               title="Stop watching"
             >
               <XMarkIcon className="w-3.5 h-3.5" />

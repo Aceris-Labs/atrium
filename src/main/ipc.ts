@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, shell } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import {
   listWorkspaces,
@@ -60,6 +60,7 @@ import type {
   Wing,
   LaunchProfile,
   ConnectorSource,
+  WorkspacePR,
 } from "../shared/types";
 
 type IpcHandler = (
@@ -90,6 +91,19 @@ function resolveWorktreePath(inputPath: string, baseDir: string): string {
   if (inputPath.startsWith("~")) return pathJoin(homedir(), inputPath.slice(1));
   if (!isAbsolute(inputPath)) return pathResolve(baseDir, inputPath);
   return inputPath;
+}
+
+function assertSafeExternalUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("Invalid URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Unsupported URL protocol: ${url.protocol}`);
+  }
+  return url.href;
 }
 
 export function registerIpcHandlers(): void {
@@ -288,8 +302,8 @@ export function registerIpcHandlers(): void {
       return result;
     },
   );
-  safeHandle("watchedPRs:remove", async (_, wingId: string, num: number) => {
-    const result = await removeWatchedPR(wingId, num);
+  safeHandle("watchedPRs:remove", async (_, wingId: string, pr: WorkspacePR) => {
+    const result = await removeWatchedPR(wingId, pr);
     void orchestrator.refreshExplicit();
     return result;
   });
@@ -297,6 +311,11 @@ export function registerIpcHandlers(): void {
   // ── Config (global only) ─────────────────────────────────────────────────
   safeHandle("config:get", () => getConfig());
   safeHandle("config:set", (_, partial) => setConfig(partial));
+
+  // ── Shell ────────────────────────────────────────────────────────────────
+  safeHandle("shell:openExternal", (_, url: string) =>
+    shell.openExternal(assertSafeExternalUrl(url)),
+  );
 
   // ── Setup detection ──────────────────────────────────────────────────────
   // Cached in main; pass force=true (wizard Re-check) to bypass.
