@@ -101,6 +101,14 @@ export function WorkspaceCard({
       }}
       onDragEnd={onWorkspaceDragEnd}
       onDragOver={(e) => {
+        console.log(
+          "[WSCard]",
+          workspace.title,
+          "dragover isDropTarget:",
+          isDropTarget,
+          "draggingPR:",
+          !!draggingPR,
+        );
         if (isDropTarget) {
           e.preventDefault();
           e.stopPropagation();
@@ -150,6 +158,14 @@ export function WorkspaceCard({
               {primaryPR.state === "closed" && (
                 <span className="badge closed">closed</span>
               )}
+              {primaryPR.state === "open" &&
+                primaryPR.mergeState === "QUEUED" && (
+                  <span className="badge merge-queued">queued</span>
+                )}
+              {primaryPR.state === "open" &&
+                primaryPR.mergeState === "DIRTY" && (
+                  <span className="badge merge-conflict">conflicts</span>
+                )}
               {primaryPR.state === "open" && primaryPR.isDraft && (
                 <span className="badge draft">draft</span>
               )}
@@ -158,13 +174,15 @@ export function WorkspaceCard({
                   {CI_LABEL[primaryPR.ciStatus]}
                 </span>
               )}
-              {primaryPR.state === "open" && primaryPR.reviewDecision && (
-                <span
-                  className={`badge ${REVIEW_CLASS[primaryPR.reviewDecision]}`}
-                >
-                  {REVIEW_LABEL[primaryPR.reviewDecision]}
-                </span>
-              )}
+              {primaryPR.state === "open" &&
+                !primaryPR.isDraft &&
+                primaryPR.reviewDecision && (
+                  <span
+                    className={`badge ${REVIEW_CLASS[primaryPR.reviewDecision]}`}
+                  >
+                    {REVIEW_LABEL[primaryPR.reviewDecision]}
+                  </span>
+                )}
             </div>
           </div>
         ) : primaryLoading ? (

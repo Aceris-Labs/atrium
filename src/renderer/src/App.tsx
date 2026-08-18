@@ -188,6 +188,19 @@ export default function App() {
     await window.api.watchedPRs.remove(activeWingId, pr);
   }
 
+  useEffect(() => {
+    const h = (e: DragEvent) => {
+      const t = e.target as HTMLElement;
+      console.log(
+        "[doc dragover]",
+        t?.tagName,
+        t?.className?.toString().slice(0, 80),
+      );
+    };
+    document.addEventListener("dragover", h);
+    return () => document.removeEventListener("dragover", h);
+  }, []);
+
   // ── Initial bootstrap ────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {

@@ -699,10 +699,16 @@ body,
   background: var(--blue) 11;
 }
 
-.badge.merge-blocked {
+.badge.merge-conflict {
   color: var(--red);
   border-color: var(--red) 44;
   background: var(--red) 11;
+}
+
+.badge.merge-blocked {
+  color: var(--orange);
+  border-color: var(--orange) 44;
+  background: var(--orange) 11;
 }
 
 .badge.merge-behind {

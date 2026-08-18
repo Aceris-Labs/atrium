@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   PlayIcon,
   StopIcon,
@@ -7,6 +7,7 @@ import {
   PlusIcon,
   TrashIcon,
   ChevronDownIcon,
+  ChevronDoubleUpIcon,
   ExclamationTriangleIcon,
 } from "@heroicons/react/20/solid";
 import { PRCard, PRCardSkeleton } from "./PRCard";
@@ -37,6 +38,17 @@ import type {
 } from "../../../shared/types";
 
 type Tab = "overview" | "items" | "links" | "settings";
+
+/** View-only slice of the linked-PR grid. Not persisted on the workspace —
+ *  resets when you switch spaces. */
+type PRStateFilter = "all" | PRStatus["state"];
+
+const PR_STATE_FILTERS: Array<{ id: PRStateFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "open", label: "Open" },
+  { id: "merged", label: "Merged" },
+  { id: "closed", label: "Closed" },
+];
 
 const AI_ACTIONS_DISABLED_MESSAGE =
   "AI actions are disabled until they use an explicit API-token-backed client with usage tracking.";
@@ -146,20 +158,34 @@ function pickDisplayTag(
   return undefined;
 }
 
+/** Badge-row action button. Matches CopyButton's treatment so the whole
+ *  cluster reads as one row: transparent, hover-revealed with the card. */
+const PR_ACTION_BTN =
+  "shrink-0 w-5 h-5 flex items-center justify-center bg-transparent border-none text-fg-muted cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity";
+
 /** Thin wrapper that pulls the per-wing tags for a PR out of the cache and
  *  passes the chosen display tag to PRCard. Keeps tag lookup co-located with
  *  the card so the parent doesn't have to thread tag membership through. */
 function PRCardWithTag({
   pr,
   wingId,
+  actions,
   onClick,
 }: {
   pr: PRStatus;
   wingId: string;
+  actions?: ReactNode;
   onClick: () => void;
 }) {
   const tags = usePRTags(wingId, pr.repo, pr.number);
-  return <PRCard pr={pr} tag={pickDisplayTag(tags)} onClick={onClick} />;
+  return (
+    <PRCard
+      pr={pr}
+      tag={pickDisplayTag(tags)}
+      actions={actions}
+      onClick={onClick}
+    />
+  );
 }
 
 export function WorkspaceDetail({
@@ -217,6 +243,7 @@ export function WorkspaceDetail({
   const [generatingDigest, setGeneratingDigest] = useState(false);
   const [actualBranch, setActualBranch] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [prStateFilter, setPRStateFilter] = useState<PRStateFilter>("all");
   const [draggingPRKey, setDraggingPRKey] = useState<string | null>(null);
   const [prDropTarget, setPRDropTarget] = useState<{
     key: string;
@@ -258,6 +285,12 @@ export function WorkspaceDetail({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id, workspace.prs]);
+
+  // Filter is view state, not workspace data — a fresh space always opens on
+  // the full list rather than inheriting the previous space's slice.
+  useEffect(() => {
+    setPRStateFilter("all");
+  }, [workspace.id]);
 
   useEffect(() => {
     window.api.agents.sessions().then(setAvailableSessions);
@@ -478,6 +511,20 @@ export function WorkspaceDetail({
     onUpdate({ ...workspace, prs: ordered });
   }
 
+  /** Jump a PR to index 0 of workspace.prs — which is also what makes it the
+   *  "primary" PR shown on the workspace card. Always operates on the full
+   *  list, not the filtered slice. */
+  function handleMovePRToTop(repo: string, num: number) {
+    const idx = workspace.prs.findIndex(
+      (p) => p.repo === repo && p.number === num,
+    );
+    if (idx <= 0) return;
+    const ordered = [...workspace.prs];
+    const [moved] = ordered.splice(idx, 1);
+    ordered.unshift(moved);
+    onUpdate({ ...workspace, prs: ordered });
+  }
+
   function handleRemovePR(repo: string, num: number) {
     onUpdate({
       ...workspace,
@@ -521,6 +568,64 @@ export function WorkspaceDetail({
   const linkedPRs = linkedSlots
     .map((s) => s.pr)
     .filter((pr): pr is PRStatus => pr !== undefined);
+
+  const prStateCounts: Record<PRStateFilter, number> = {
+    all: workspace.prs.length,
+    open: linkedPRs.filter((pr) => pr.state === "open").length,
+    merged: linkedPRs.filter((pr) => pr.state === "merged").length,
+    closed: linkedPRs.filter((pr) => pr.state === "closed").length,
+  };
+
+  const visiblePRs =
+    prStateFilter === "all"
+      ? linkedPRs
+      : linkedPRs.filter((pr) => pr.state === prStateFilter);
+
+  // Not-yet-hydrated PRs have no state to match against, so they only appear
+  // under "All". Rendered as skeletons after the hydrated cards.
+  const pendingPRs =
+    prStateFilter === "all"
+      ? workspace.prs.filter(
+          (p) =>
+            !linkedPRs.some((k) => k.repo === p.repo && k.number === p.number),
+        )
+      : [];
+
+  const firstPR = workspace.prs[0];
+  const isFirstPR = (repo: string | undefined, num: number) =>
+    !!firstPR && firstPR.repo === repo && firstPR.number === num;
+
+  /** Space-membership actions for a linked PR. Passed into PRCard's `actions`
+   *  slot — the card renders them but knows nothing about workspaces. */
+  function renderPRActions(repo: string, num: number): ReactNode {
+    return (
+      <>
+        {!isFirstPR(repo, num) && (
+          <button
+            className={`${PR_ACTION_BTN} hover:text-blue`}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleMovePRToTop(repo, num);
+            }}
+            title="Move to top"
+          >
+            <ChevronDoubleUpIcon className="w-3.5 h-3.5" />
+          </button>
+        )}
+        <button
+          className={`${PR_ACTION_BTN} hover:text-red`}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleRemovePR(repo, num);
+          }}
+          title="Unlink PR"
+        >
+          <XMarkIcon className="w-3.5 h-3.5" />
+        </button>
+      </>
+    );
+  }
+
   const tmuxRunning = useTmuxSession(workspace.tmuxSession);
 
   return (
@@ -1003,6 +1108,27 @@ export function WorkspaceDetail({
                       {workspace.prs.length}
                     </span>
                   )}
+                  {workspace.prs.length > 0 && (
+                    <div className="flex items-center gap-1 ml-2">
+                      {PR_STATE_FILTERS.map((f) => (
+                        <button
+                          key={f.id}
+                          className={`text-xs px-2 py-0.5 rounded-sm border transition-colors ${
+                            prStateFilter === f.id
+                              ? "bg-bg-input border-line-hover text-fg"
+                              : "border-transparent text-fg-muted hover:text-fg"
+                          }`}
+                          onClick={() => setPRStateFilter(f.id)}
+                          title={`Show ${f.label.toLowerCase()} PRs`}
+                        >
+                          {f.label}
+                          <span className="ml-1 tabular-nums opacity-60">
+                            {prStateCounts[f.id]}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <div className="ml-auto flex items-center gap-2">
                     <input
                       className="form-input form-input-sm"
@@ -1032,16 +1158,8 @@ export function WorkspaceDetail({
                       if (!draggingPRKey) return;
                       e.preventDefault();
                       const ids = [
-                        ...linkedPRs.map((p) => `${p.repo ?? ""}-${p.number}`),
-                        ...workspace.prs
-                          .filter(
-                            (p) =>
-                              !linkedPRs.find(
-                                (k) =>
-                                  k.repo === p.repo && k.number === p.number,
-                              ),
-                          )
-                          .map((p) => `${p.repo}-${p.number}`),
+                        ...visiblePRs.map((p) => `${p.repo ?? ""}-${p.number}`),
+                        ...pendingPRs.map((p) => `${p.repo}-${p.number}`),
                       ];
                       const point = findNearestDropPoint(
                         e.currentTarget,
@@ -1070,7 +1188,7 @@ export function WorkspaceDetail({
                       setPRDropTarget(null);
                     }}
                   >
-                    {linkedPRs.map((pr) => {
+                    {visiblePRs.map((pr) => {
                       const key = `${pr.repo ?? ""}-${pr.number}`;
                       const isDragOver =
                         draggingPRKey !== null &&
@@ -1103,48 +1221,33 @@ export function WorkspaceDetail({
                           <PRCardWithTag
                             pr={pr}
                             wingId={wingId}
+                            actions={renderPRActions(pr.repo ?? "", pr.number)}
                             onClick={() =>
                               window.api.shell.openExternal(pr.url)
                             }
                           />
-                          <button
-                            className="detail-pr-remove-overlay"
-                            onClick={() =>
-                              handleRemovePR(pr.repo ?? "", pr.number)
-                            }
-                            title="Unlink PR"
-                          >
-                            <XMarkIcon className="w-3.5 h-3.5" />
-                          </button>
                         </div>
                       );
                     })}
-                    {workspace.prs
-                      .filter(
-                        (p) =>
-                          !linkedPRs.find(
-                            (k) => k.repo === p.repo && k.number === p.number,
-                          ),
-                      )
-                      .map((p) => (
-                        <div
-                          key={`${p.repo}-${p.number}`}
-                          className="detail-pr-card-wrapper"
-                        >
-                          <PRCardSkeleton number={p.number} repo={p.repo} />
-                          <button
-                            className="detail-pr-remove-overlay"
-                            onClick={() => handleRemovePR(p.repo, p.number)}
-                            title="Unlink PR"
-                          >
-                            <XMarkIcon className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
+                    {pendingPRs.map((p) => (
+                      <PRCardSkeleton
+                        key={`${p.repo}-${p.number}`}
+                        number={p.number}
+                        repo={p.repo}
+                        actions={renderPRActions(p.repo, p.number)}
+                      />
+                    ))}
                   </div>
                 ) : (
                   <p className="detail-empty-text">No PRs linked yet.</p>
                 )}
+                {workspace.prs.length > 0 &&
+                  visiblePRs.length === 0 &&
+                  pendingPRs.length === 0 && (
+                    <p className="detail-empty-text">
+                      No {prStateFilter} PRs in this space.
+                    </p>
+                  )}
               </div>
 
               {/* Status snapshot */}

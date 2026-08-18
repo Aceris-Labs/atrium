@@ -55,6 +55,9 @@ export interface PRStatus {
     | "CLEAN"
     | "BLOCKED"
     | "BEHIND"
+    | "DIRTY"
+    | "DRAFT"
+    | "HAS_HOOKS"
     | "QUEUED"
     | "UNSTABLE"
     | "UNKNOWN";
@@ -124,11 +127,7 @@ export interface InboxItem {
 }
 
 export type ItemStatus =
-  | "todo"
-  | "blocked"
-  | "in-progress"
-  | "in-review"
-  | "monitoring";
+  "todo" | "blocked" | "in-progress" | "in-review" | "monitoring";
 
 /** Unified todo+note. Title is required and shown in the list; body is
  *  optional markdown shown in the detail side-panel. Status is separate from
@@ -165,11 +164,7 @@ export interface WorkspaceLink {
 
 // ── Link hydration ─────────────────────────────────────────────────────────
 export type LinkStatusKind =
-  | "open"
-  | "in-progress"
-  | "done"
-  | "blocked"
-  | "unknown";
+  "open" | "in-progress" | "done" | "blocked" | "unknown";
 
 export type LinkStatusError =
   | "auth"
@@ -260,10 +255,7 @@ export interface FigmaConfig {
  * "oauth"     — OAuth token (Linear only)
  * "gh-cli"    — GitHub CLI (`gh`) with its own stored authentication
  */
-export type ConnectorStrategy =
-  | "api-key"
-  | "oauth"
-  | "gh-cli";
+export type ConnectorStrategy = "api-key" | "oauth" | "gh-cli";
 
 export interface StrategyStatus {
   strategy: ConnectorStrategy;
@@ -285,8 +277,7 @@ export interface ConnectorStatus {
 }
 
 export type ConnectorTestResult =
-  | { ok: true; identity?: string }
-  | { ok: false; error: string };
+  { ok: true; identity?: string } | { ok: false; error: string };
 
 export interface TmuxPane {
   command?: string; // "${claude}" expands to the full claude CLI invocation

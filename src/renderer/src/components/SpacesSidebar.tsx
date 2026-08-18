@@ -567,6 +567,12 @@ export function SpacesSidebar({
                           key={ws.id}
                           className="relative h-full"
                           onDragOver={(e) => {
+                            console.log(
+                              "[SB wrapper]",
+                              ws.title,
+                              "dragover sameSection:",
+                              sameSection,
+                            );
                             if (!sameSection) return;
                             e.preventDefault();
                             e.stopPropagation();

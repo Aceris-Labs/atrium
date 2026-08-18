@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { PRStatus } from "../../../shared/types";
 import { CopyButton } from "./CopyButton";
 
@@ -6,6 +7,10 @@ interface Props {
   tag?: "review" | "watching" | "mine";
   /** Title of the space this PR is associated with, if any. */
   spaceTitle?: string;
+  /** Container-supplied buttons for the badge row — actions the card itself
+   *  can't know about (unlinking from a space, reordering). Rendered left of
+   *  the copy button. */
+  actions?: ReactNode;
   dragging?: boolean;
   onDragStart?: () => void;
   onDragEnd?: () => void;
@@ -40,6 +45,9 @@ const REVIEW_CLASS: Record<string, string> = {
 const MERGE_BADGE: Record<string, { label: string; cls: string } | null> = {
   QUEUED: null, // promoted to a top-row state badge alongside merged/closed
   CLEAN: null, // ready to merge, but not special enough to badge
+  DRAFT: null, // already covered by the draft badge
+  HAS_HOOKS: null,
+  DIRTY: { label: "conflicts", cls: "merge-conflict" },
   BLOCKED: { label: "blocked", cls: "merge-blocked" },
   BEHIND: { label: "behind base", cls: "merge-behind" },
   UNSTABLE: { label: "unstable", cls: "merge-unstable" },
@@ -53,6 +61,7 @@ export function PRCard({
   pr,
   tag,
   spaceTitle,
+  actions,
   dragging,
   onDragStart,
   onDragEnd,
@@ -65,7 +74,17 @@ export function PRCard({
     <div
       className={`${CARD_BASE}${dragging ? " opacity-40" : ""}${dimmed ? " opacity-60" : ""}`}
       draggable={!!onDragStart}
-      onDragStart={onDragStart}
+      onDragStart={(e) => {
+        console.log(
+          "[PRCard] dragstart",
+          pr.number,
+          "has handler:",
+          !!onDragStart,
+        );
+        onDragStart?.();
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(pr.number));
+      }}
       onDragEnd={onDragEnd}
       onClick={onClick}
     >
@@ -91,12 +110,6 @@ export function PRCard({
           {pr.state === "closed" && (
             <span className="badge closed">closed</span>
           )}
-          {pr.state === "open" && pr.mergeState === "QUEUED" && (
-            <span className="badge merge-queued">queued</span>
-          )}
-          {pr.isDraft && pr.state === "open" && (
-            <span className="badge draft">draft</span>
-          )}
           {pr.state === "open" &&
             (pr.ciStatus === "pending" ? (
               <span className="badge ci-pending">
@@ -110,6 +123,7 @@ export function PRCard({
           {pr.autoMerge && pr.state === "open" && (
             <span className="badge merge-auto">auto-merge</span>
           )}
+          {actions}
           <CopyButton value={pr.url} title="Copy PR URL" />
         </div>
       </div>
@@ -141,14 +155,22 @@ export function PRCard({
               {mergeBadge.label}
             </span>
           )}
-          {pr.state === "open" && pr.reviewDecision && (
-            <span className={`badge ${REVIEW_CLASS[pr.reviewDecision]}`}>
-              {REVIEW_LABEL[pr.reviewDecision]}
-            </span>
-          )}
-          {pr.state === "open" && pr.author && !pr.reviewDecision && (
-            <span className="text-xs text-fg-muted shrink-0">@{pr.author}</span>
-          )}
+          {pr.state === "open" &&
+            (pr.mergeState === "QUEUED" ? (
+              <span className="badge merge-queued">queued</span>
+            ) : pr.isDraft ? (
+              <span className="badge draft">draft</span>
+            ) : pr.reviewDecision ? (
+              <span className={`badge ${REVIEW_CLASS[pr.reviewDecision]}`}>
+                {REVIEW_LABEL[pr.reviewDecision]}
+              </span>
+            ) : (
+              pr.author && (
+                <span className="text-xs text-fg-muted shrink-0">
+                  @{pr.author}
+                </span>
+              )
+            ))}
         </div>
       </div>
     </div>
@@ -158,9 +180,12 @@ export function PRCard({
 interface SkeletonProps {
   number?: number;
   repo?: string;
+  /** Same slot as PRCard's — keeps container actions available while a PR is
+   *  still hydrating. */
+  actions?: ReactNode;
 }
 
-export function PRCardSkeleton({ number, repo }: SkeletonProps) {
+export function PRCardSkeleton({ number, repo, actions }: SkeletonProps) {
   return (
     <div className={CARD_BASE}>
       <div className="flex items-center justify-between gap-2">
@@ -171,8 +196,9 @@ export function PRCardSkeleton({ number, repo }: SkeletonProps) {
         ) : (
           <span className="shimmer-bar w-12 h-4" />
         )}
-        <div className="flex gap-1 shrink-0">
+        <div className="flex gap-1 shrink-0 items-center">
           <span className="shimmer-bar w-10 h-4" />
+          {actions}
         </div>
       </div>
       <div className="text-base font-medium text-fg overflow-hidden leading-[1.4]">

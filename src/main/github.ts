@@ -32,6 +32,7 @@ const PR_FIELDS_DECISION_CHECK = `
     number
     reviewDecision
     mergeStateStatus
+    isInMergeQueue
     autoMergeRequest { enabledAt }
     repository { nameWithOwner }
     commits(last: 1) {
@@ -52,6 +53,7 @@ const PR_FIELDS_DETAIL = `
     headRefOid
     reviewDecision
     mergeStateStatus
+    isInMergeQueue
     autoMergeRequest { enabledAt }
     repository { nameWithOwner }
     author { login }
@@ -410,7 +412,7 @@ function mapNodeLite(node: any): PRStatus {
     ciStatus: mapCIState(ciState),
     reviewDecision: node.reviewDecision ?? null,
     openComments: 0,
-    mergeState: node.mergeStateStatus ?? undefined,
+    mergeState: normalizeMergeState(node),
     autoMerge: !!node.autoMergeRequest,
     author: node.author?.login,
     repo,
@@ -465,10 +467,15 @@ function decisionSignatureForNode(node: any): string {
     node.id ?? "",
     node.reviewDecision ?? "",
     node.mergeStateStatus ?? "",
+    node.isInMergeQueue ? "queued" : "not-queued",
     node.autoMergeRequest?.enabledAt ?? "",
     commit?.oid ?? "",
     ciState,
   ].join("|");
+}
+
+function normalizeMergeState(node: any): PRStatus["mergeState"] | undefined {
+  return node.isInMergeQueue ? "QUEUED" : (node.mergeStateStatus ?? undefined);
 }
 
 function deriveCIFromChecks(checks: any[]): PRStatus["ciStatus"] {
